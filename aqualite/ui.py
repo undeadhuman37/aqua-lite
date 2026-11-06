@@ -88,8 +88,7 @@ class SettingsWindow:
         self.app, self.cfg = app, app.cfg
         self.win = tk.Toplevel(root)
         self.win.title(f"{APP_NAME} {VERSION}")
-        self.win.geometry("780x620")
-        self.win.minsize(700, 540)
+
         try:
             self.win.iconbitmap(app.icon_path)
         except Exception:
@@ -97,7 +96,12 @@ class SettingsWindow:
         self.v = {}
         self._imgs = []
         apply_aero_style(self.win, self._imgs)
-        self.win.geometry("820x700")
+        # size for the screen's scaling (125%, 150%...) so the bottom buttons are never cut off
+        sc = max(1.0, self.win.winfo_fpixels("1i") / 96.0)
+        w, h = int(820 * sc), int(720 * sc)
+        h = min(h, self.win.winfo_screenheight() - int(60 * sc))
+        self.win.geometry(f"{w}x{h}")
+        self.win.minsize(int(700 * sc), int(560 * sc))
         try:
             from PIL import ImageTk
             ban = ImageTk.PhotoImage(aero.sky_banner(820, 96), master=self.win)
