@@ -1,0 +1,363 @@
+"""Aqua Lite main app: hotkey -> 16 kHz mic -> speech-to-text -> AI formatting -> paste -> restore clipboard."""
+import logging
+import os
+import queue
+import sys
+import threading
+import time
+import tkinter as tk
+
+from . import audio, config, history, hotkeys, llm, music, sounds, stt, textproc
+from .overlay import FlowBar
+
+IS_WIN = sys.platform == "win32"
+if IS_WIN:
+    from . import winapi
+
+log = logging.getLogger("aqualite")
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+class App:
+    def __init__(self):
+        self.cfg = config.load()
+        self.events = queue.Queue()
+        self.jobs = queue.Queue()
+        self.recorder = audio.Recorder()
+        self.music = music.MusicPlayer(self.cfg)
+        self.machine = hotkeys.HotkeyMachine(self.cfg, self._on_hotkey)
+        self.paused = False
+        self.rec_started = 0.0
+        self.rec_command = False
+        self.settings = None
+        self.icon_path = os.path.join(HERE, "assets", "aqualite.ico")
+
+        if IS_WIN:
+            winapi.set_dpi_aware()
+            self.cfg["launch_at_startup"] = os.path.exists(winapi.startup_shortcut_path())
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.root.title("Aqua Lite")
+        self.bar = FlowBar(self.root, lambda: self.recorder.level, self._bar_clicked, self.cfg.get("show_idle_bar", True))
+
+        self.tray = None
+        try:
+            from .tray import Tray
+            self.tray = Tray(self)
+            self.tray.start()
+        except Exception as e:
+            log.warning("tray unavailable: %s", e)
+
+        self.hook = None
+        if IS_WIN:
+            self.hook = winapi.KeyboardHook(self.machine.on_key)
+            self.hook.start()
+            self.hook.ok.wait(3)
+            if self.hook.error:
+                log.error(self.hook.error)
+
+        if IS_WIN:
+            winapi.watch_open_requests(lambda: self.post("open_settings"))
+        threading.Thread(target=self._worker, daemon=True, name="worker").start()
+        self._preload()
+        self.root.after(15, self._pump)
+        if self.cfg.get("first_run", True):
+            self.cfg["first_run"] = False
+            self.cfg.save()
+            self.root.after(600, self.open_settings)
+        ptt = self.cfg["hotkey_ptt"].upper().replace("+", " + ")
+        self.root.after(900, lambda: self.bar.toast(f"Aqua Lite is ready - hold {ptt} and talk", "ok", 4))
+
+    # ------------------------------------------------------------------ plumbing
+    def post(self, name, *args):
+        self.events.put((name, args))
+
+    def _on_hotkey(self, name, command):  # runs on the hook thread: must be quick
+        if name == "mask" and IS_WIN:
+            threading.Thread(target=winapi.send_mask, daemon=True).start()
+            return
+        self.events.put(("hk_" + name, (command,)))
+
+    def _pump(self):
+        try:
+            while True:
+                name, args = self.events.get_nowait()
+                try:
+                    getattr(self, "ev_" + name)(*args)
+                except Exception:
+                    log.exception("event %s failed", name)
+        except queue.Empty:
+            pass
+        if self.machine.recording and self.machine.locked and self.rec_started and \
+                time.time() - self.rec_started > 60 * float(self.cfg.get("max_handsfree_minutes", 10)):
+            self.machine.reset()
+            self.ev_hk_stop(self.rec_command)
+        self.root.after(15, self._pump)
+
+    def _preload(self):
+        if stt.resolve_engine(self.cfg) == "local":
+            threading.Thread(target=self._safe_load, daemon=True).start()
+
+    def _safe_load(self):
+        try:
+            stt.LOCAL.load(self.cfg)
+            log.info("local model: %s", stt.LOCAL.status)
+        except Exception as e:
+            log.error("local model failed: %s", e)
+            self.post("toast", f"Local speech model failed to load: {e}", "error")
+
+    # ------------------------------------------------------------------ hotkey events
+    def ev_hk_start(self, command):
+        try:
+            self.recorder.start(self.cfg.get("mic_device", ""))
+        except Exception as e:
+            self.machine.reset()
+            log.exception("mic")
+            self.bar.toast(f"Microphone error: {e}", "error", 5)
+            return
+        self.rec_started, self.rec_command = time.time(), command
+        self.bar.set_state("command" if command else "recording")
+        self._sound("start")
+        self._music(True)
+        self._tray("recording")
+
+    def ev_hk_command(self, _command):
+        self.rec_command = True
+        self.bar.set_state("command")
+
+    def ev_hk_lock(self, command):
+        self.bar.set_state("command" if (command or self.rec_command) else "locked")
+        self._sound("lock")
+
+    def ev_hk_cancel(self, _command):
+        self._music(False)
+        if self.recorder.active:
+            self.recorder.stop()
+        self.rec_started = 0
+        self.bar.set_state("idle")
+        self._tray("idle")
+
+    def ev_hk_stop(self, command):
+        if not self.recorder.active:
+            return
+        self._music(False)
+        pcm, speech = self.recorder.stop()
+        mode = "command" if (command or self.rec_command) else "dictation"
+        self.rec_started = 0
+        self._tray("idle")
+        if len(pcm) < audio.RATE * 0.3:  # a tap, not a dictation
+            self.bar.set_state("idle")
+            return
+        self._sound("stop")
+        self.bar.set_state("processing")
+        self._tray("processing")
+        self.jobs.put(("dictate", pcm, speech, mode))
+
+    def ev_hk_paste_last(self, _command):
+        self.jobs.put(("paste_last",))
+
+    # ------------------------------------------------------------------ ui events
+    def ev_toast(self, text, kind="info", seconds=2.8):
+        self.bar.toast(text, kind, seconds)
+
+    def ev_bar(self, state):
+        self.bar.set_state(state)
+        self._tray("idle" if state == "idle" else state)
+
+    def ev_open_settings(self, tab=0):
+        self.open_settings(tab)
+
+    def ev_open_history(self):
+        self.open_settings(7)
+
+    def ev_copy_last(self):
+        text = history.last_text()
+        if text:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.bar.toast("Last transcript copied", "ok")
+
+    def ev_toggle_pause(self):
+        self.paused = not self.paused
+        self.machine.paused = self.paused
+        self._tray("paused" if self.paused else "idle")
+        self.bar.toast("Shortcuts paused" if self.paused else "Shortcuts back on", "warn" if self.paused else "ok")
+
+    def ev_quit(self):
+        if self.hook:
+            self.hook.stop()
+        if self.tray:
+            self.tray.stop()
+        self.root.after(50, self.root.destroy)
+
+    def _bar_clicked(self, state):
+        if state == "idle" and not self.paused:
+            # click the idle bar = start hands-free dictation
+            self.machine.recording = self.machine.locked = True
+            self.ev_hk_start(False)
+            if self.recorder.active:
+                self.bar.set_state("locked")
+            else:
+                self.machine.reset()
+        elif state in ("locked", "recording", "command"):
+            self.machine.reset()
+            self.ev_hk_stop(self.rec_command)
+
+    def open_settings(self, tab=0):
+        from .ui import SettingsWindow
+        if self.settings and self.settings.win.winfo_exists():
+            self.settings.win.deiconify()
+            self.settings.win.lift()
+        else:
+            self.settings = SettingsWindow(self.root, self)
+        self.settings.nb.select(tab)
+        w = self.settings.win  # bring it to the front even when opened from the tray / Start menu
+        w.attributes("-topmost", True)
+        w.after(400, lambda: w.attributes("-topmost", False))
+        w.focus_force()
+
+    def apply_settings(self, new):
+        old_startup = self.cfg.get("launch_at_startup")
+        self.cfg.clear()
+        self.cfg.update(new)
+        self.cfg.save()
+        self.machine.configure(self.cfg)
+        self.bar.show_idle = self.cfg.get("show_idle_bar", True)
+        self.bar.set_state(self.bar.state if self.bar.state != "toast" else "idle")
+        if IS_WIN and old_startup != self.cfg.get("launch_at_startup"):
+            winapi.set_startup(self.cfg["launch_at_startup"], os.path.join(HERE, "AquaLite.pyw"), self.icon_path)
+        self._preload()
+
+    def _music(self, on):
+        try:
+            self.music.start() if on else self.music.stop()
+        except Exception as e:
+            log.warning("music: %s", e)
+
+    def _sound(self, name):
+        if self.cfg.get("sounds", True):
+            sounds.play(name)
+
+    def _tray(self, state):
+        if self.tray:
+            self.tray.set_state("paused" if self.paused and state == "idle" else state)
+
+    # ------------------------------------------------------------------ the pipeline (worker thread)
+    def _worker(self):
+        while True:
+            job = self.jobs.get()
+            try:
+                if job[0] == "dictate":
+                    self._dictate(*job[1:])
+                elif job[0] == "paste_last":
+                    text = history.last_text()
+                    if text and IS_WIN:
+                        winapi.paste(text, self.cfg)
+                    elif not text:
+                        self.post("toast", "Nothing dictated yet", "warn")
+            except stt.STTError as e:
+                log.error("stt: %s", e)
+                self.post("toast", f"Transcription failed: {str(e)[:70]}", "error", 5)
+                self._sound("error")
+            except Exception as e:
+                log.exception("job failed")
+                self.post("toast", f"Error: {str(e)[:70]}", "error", 5)
+                self._sound("error")
+            finally:
+                if self.bar.state == "processing":
+                    self.post("bar", "idle")
+
+    def _context(self):
+        if IS_WIN:
+            proc, title, pid = winapi.foreground()
+        else:
+            proc, title, pid = "demo", "", 0
+        return {"app": proc, "title": title, "pid": pid, "category": textproc.app_category(proc, title)}, (proc, title, pid)
+
+    def _dictate(self, pcm, speech_secs, mode):
+        cfg = self.cfg
+        t0 = time.perf_counter()
+        seconds = len(pcm) / audio.RATE
+        if speech_secs < 0.12:
+            self.post("toast", "Didn't catch that - no speech heard", "warn")
+            return
+        if cfg.get("whisper_boost", True):
+            pcm = audio.boost(pcm)
+        raw, engine = stt.transcribe(pcm, cfg)
+        if stt.is_hallucination(raw, speech_secs):
+            raw = ""
+        if not raw.strip():
+            self.post("toast", "Didn't catch that", "warn")
+            history.add(app="", title="", mode=mode, raw="", final="", seconds=seconds, words=0,
+                        engine=engine, latency=time.perf_counter() - t0, status="empty")
+            return
+        ctx, target = self._context()
+        status = "ok"
+        saved = None
+        if mode == "command":
+            if not llm.resolve_provider(cfg):
+                self.post("toast", "Command Mode needs an AI key (Settings > Speech & AI)", "warn", 5)
+                return
+            selection, saved = winapi.copy_selection() if IS_WIN else ("", None)
+            final = llm.run_command(cfg, raw, selection, ctx)
+        else:
+            final = self._format(raw, ctx)
+            if cfg.get("add_trailing_space", True) and final and not final[-1].isspace():
+                final += " "
+        latency = time.perf_counter() - t0
+        result = {"status": "demo"}
+        if final.strip() and IS_WIN:
+            result = winapi.paste(final, cfg, target=target, saved=saved)
+            status = result["status"]
+        history.add(app=ctx["app"], title=ctx["title"][:200], mode=mode, raw=raw, final=final.strip(),
+                    seconds=seconds, words=textproc.word_count(final), engine=engine, latency=latency, status=status)
+        log.info("%s %.1fs audio, %.2fs, %s [%s] -> %s: %r", mode, seconds, latency, engine, ctx["category"],
+                 result.get("keys"), final)
+        if status in ("elevated", "blocked"):
+            self.post("toast", "Can't type into this window - text copied, press Ctrl+V", "warn", 5)
+        else:
+            self.post("bar", "idle")
+
+    def _format(self, raw, ctx):
+        cfg = self.cfg
+        whole = textproc.whole_snippet(raw, cfg.get("snippets", []))
+        if whole is not None:
+            return whole
+        protected, mapping = textproc.protect_snippets(raw, cfg.get("snippets", []))
+        text = None
+        if llm.resolve_provider(cfg) and cfg.get("editing_strength") != "off":
+            try:
+                out = llm.format_text(cfg, protected, ctx)
+                if not textproc.looks_like_an_answer(protected, out):
+                    text = out
+                else:
+                    log.warning("formatter output rejected: %r", out)
+            except Exception as e:
+                log.warning("AI formatting failed, using offline cleanup: %s", e)
+                self.post("toast", "AI formatting unavailable - used offline cleanup", "warn")
+        if text is None:
+            text = textproc.local_cleanup(protected)
+        text = textproc.expand_snippets(text, mapping)
+        return textproc.apply_replacements(text, cfg.get("replacements", []))
+
+    def run(self):
+        self.root.mainloop()
+
+
+def main():
+    logdir = config.data_dir()
+    handlers = [logging.FileHandler(os.path.join(logdir, "aqualite.log"), encoding="utf-8")]
+    if sys.stdout is None or sys.stderr is None:  # pythonw: give libraries somewhere to write
+        f = open(os.path.join(logdir, "output.log"), "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stdout or f
+        sys.stderr = sys.stderr or f
+    else:
+        handlers.append(logging.StreamHandler())
+    logging.basicConfig(level=logging.INFO, handlers=handlers, format="%(asctime)s %(levelname)s %(message)s")
+    if IS_WIN and not winapi.single_instance():
+        if not winapi.ask_running_instance_to_open():
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, "Aqua Lite is already running (look for its icon in the tray).",
+                                             "Aqua Lite", 0x40)
+        return
+    App().run()

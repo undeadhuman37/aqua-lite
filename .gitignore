@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.zip
+*.log
+# never commit personal data or music
+config.json
+history.sqlite
+music/

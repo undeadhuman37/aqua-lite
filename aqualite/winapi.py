@@ -1,0 +1,560 @@
+"""Windows plumbing: keyboard hook, SendInput, clipboard snapshot/restore, focused-app info.
+
+The paste path copies the rules the teardown proved in Wispr Flow Helper.exe (section 7):
+  save clipboard -> write text -> all key-downs, Sleep(50), all key-ups -> wait 50 ms
+  -> restore after 500/3000/5000 ms depending on the app -> skip restore if the clipboard changed.
+"""
+import ctypes
+import os
+import subprocess
+import sys
+import threading
+import time
+from ctypes import wintypes as W
+
+from . import textproc
+
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+
+ULONG_PTR = ctypes.c_size_t
+LRESULT = ctypes.c_ssize_t
+HANDLE = ctypes.c_void_p
+MAGIC = 0x464C4F57  # dwExtraInfo tag on keys we inject, so our own hook ignores them
+
+# ------------------------------------------------------------------ prototypes
+def _proto(fn, res, *args):
+    fn.restype, fn.argtypes = res, args
+    return fn
+
+_proto(user32.GetForegroundWindow, W.HWND)
+_proto(user32.GetWindowThreadProcessId, W.DWORD, W.HWND, ctypes.POINTER(W.DWORD))
+_proto(user32.GetWindowTextLengthW, ctypes.c_int, W.HWND)
+_proto(user32.GetWindowTextW, ctypes.c_int, W.HWND, W.LPWSTR, ctypes.c_int)
+_proto(user32.GetAsyncKeyState, ctypes.c_short, ctypes.c_int)
+_proto(user32.MapVirtualKeyW, W.UINT, W.UINT, W.UINT)
+_proto(user32.OpenClipboard, W.BOOL, W.HWND)
+_proto(user32.CloseClipboard, W.BOOL)
+_proto(user32.EmptyClipboard, W.BOOL)
+_proto(user32.GetClipboardData, HANDLE, W.UINT)
+_proto(user32.SetClipboardData, HANDLE, W.UINT, HANDLE)
+_proto(user32.EnumClipboardFormats, W.UINT, W.UINT)
+_proto(user32.RegisterClipboardFormatW, W.UINT, W.LPCWSTR)
+_proto(user32.GetClipboardSequenceNumber, W.DWORD)
+_proto(user32.CallNextHookEx, LRESULT, HANDLE, ctypes.c_int, W.WPARAM, W.LPARAM)
+_proto(user32.UnhookWindowsHookEx, W.BOOL, HANDLE)
+_proto(user32.GetMessageW, W.BOOL, ctypes.POINTER(W.MSG), W.HWND, W.UINT, W.UINT)
+_proto(user32.PostThreadMessageW, W.BOOL, W.DWORD, W.UINT, W.WPARAM, W.LPARAM)
+_proto(user32.GetWindowLongPtrW, ctypes.c_ssize_t, W.HWND, ctypes.c_int)
+_proto(user32.SetWindowLongPtrW, ctypes.c_ssize_t, W.HWND, ctypes.c_int, ctypes.c_ssize_t)
+_proto(user32.SetWindowPos, W.BOOL, W.HWND, W.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, W.UINT)
+_proto(user32.GetParent, W.HWND, W.HWND)
+_proto(user32.IsIconic, W.BOOL, W.HWND)
+_proto(user32.ShowWindow, W.BOOL, W.HWND, ctypes.c_int)
+_proto(user32.GetCursorPos, W.BOOL, ctypes.POINTER(W.POINT))
+_proto(user32.MonitorFromPoint, HANDLE, W.POINT, W.DWORD)
+_proto(kernel32.GlobalAlloc, HANDLE, W.UINT, ctypes.c_size_t)
+_proto(kernel32.GlobalLock, ctypes.c_void_p, HANDLE)
+_proto(kernel32.GlobalUnlock, W.BOOL, HANDLE)
+_proto(kernel32.GlobalSize, ctypes.c_size_t, HANDLE)
+_proto(kernel32.GlobalFree, HANDLE, HANDLE)
+_proto(kernel32.OpenProcess, HANDLE, W.DWORD, W.BOOL, W.DWORD)
+_proto(kernel32.CloseHandle, W.BOOL, HANDLE)
+_proto(kernel32.QueryFullProcessImageNameW, W.BOOL, HANDLE, W.DWORD, W.LPWSTR, ctypes.POINTER(W.DWORD))
+_proto(kernel32.GetCurrentProcess, HANDLE)
+_proto(kernel32.GetCurrentThreadId, W.DWORD)
+_proto(kernel32.GetModuleHandleW, HANDLE, W.LPCWSTR)
+_proto(kernel32.CreateMutexW, HANDLE, ctypes.c_void_p, W.BOOL, W.LPCWSTR)
+_proto(advapi32.OpenProcessToken, W.BOOL, HANDLE, W.DWORD, ctypes.POINTER(HANDLE))
+_proto(advapi32.GetTokenInformation, W.BOOL, HANDLE, ctypes.c_int, ctypes.c_void_p, W.DWORD, ctypes.POINTER(W.DWORD))
+
+
+# ------------------------------------------------------------------ SendInput
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", W.WORD), ("wScan", W.WORD), ("dwFlags", W.DWORD), ("time", W.DWORD),
+                ("dwExtraInfo", ULONG_PTR)]
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", W.LONG), ("dy", W.LONG), ("mouseData", W.DWORD), ("dwFlags", W.DWORD),
+                ("time", W.DWORD), ("dwExtraInfo", ULONG_PTR)]
+
+
+class _INPUTUNION(ctypes.Union):
+    _fields_ = [("ki", KEYBDINPUT), ("mi", MOUSEINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", W.DWORD), ("u", _INPUTUNION)]
+
+
+_proto(user32.SendInput, W.UINT, W.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
+
+VK = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "v": 0x56, "c": 0x43, "insert": 0x2D}
+EXTENDED = {0x2D, 0x2E, 0x24, 0x23, 0x21, 0x22, 0x25, 0x26, 0x27, 0x28, 0xA3, 0xA5, 0x5B, 0x5C}
+MASK_VK = 0xE8  # unassigned VK: an "intervening key" so Win/Alt release doesn't open Start / the menu bar
+
+
+def _inputs(vks, up):
+    arr = (INPUT * len(vks))()
+    for i, vk in enumerate(vks):
+        flags = (0x2 if up else 0) | (0x1 if vk in EXTENDED else 0)
+        arr[i].type = 1  # INPUT_KEYBOARD
+        arr[i].ki = KEYBDINPUT(vk, user32.MapVirtualKeyW(vk, 0), flags, 0, MAGIC)
+    return arr
+
+
+def _send(vks, up):
+    arr = _inputs(vks, up)
+    return user32.SendInput(len(vks), arr, ctypes.sizeof(INPUT)) == len(vks)
+
+
+def send_combo(names):
+    """Wispr helper timing: all key-downs in one SendInput, Sleep(50), all key-ups (retry once)."""
+    vks = [VK[n] for n in names]
+    ok = _send(vks, False)
+    time.sleep(0.05)
+    if not _send(list(reversed(vks)), True):
+        time.sleep(0.02)
+        _send(list(reversed(vks)), True)
+    return ok
+
+
+def send_mask():
+    _send([MASK_VK], False)
+    _send([MASK_VK], True)
+
+
+MODIFIER_VKS = (0x10, 0x11, 0x12, 0x5B, 0x5C)
+
+
+def modifiers_held():
+    return [vk for vk in MODIFIER_VKS if user32.GetAsyncKeyState(vk) & 0x8000]
+
+
+def wait_modifiers_released(timeout=2.0):
+    """Wispr refuses to paste while a modifier is held (failure cause 2). We wait, then release them."""
+    end = time.time() + timeout
+    while time.time() < end:
+        if not modifiers_held():
+            return True
+        time.sleep(0.02)
+    held = modifiers_held()
+    if held:
+        if any(v in (0x12, 0x5B, 0x5C) for v in held):
+            send_mask()
+        _send(held, True)
+    return False
+
+
+# ------------------------------------------------------------------ focused app
+def foreground():
+    """(process name without .exe, window title, pid)."""
+    hwnd = user32.GetForegroundWindow()
+    pid = W.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    n = user32.GetWindowTextLengthW(hwnd)
+    buf = ctypes.create_unicode_buffer(n + 1)
+    user32.GetWindowTextW(hwnd, buf, n + 1)
+    name = "unknown"
+    h = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if h:
+        pbuf, size = ctypes.create_unicode_buffer(520), W.DWORD(520)
+        if kernel32.QueryFullProcessImageNameW(h, 0, pbuf, ctypes.byref(size)):
+            name = pbuf.value.rsplit("\\", 1)[-1].rsplit(".", 1)[0]
+        kernel32.CloseHandle(h)
+    return name, buf.value, pid.value
+
+
+def _token_elevated(proc_handle):
+    tok = HANDLE()
+    if not advapi32.OpenProcessToken(proc_handle, 0x0008, ctypes.byref(tok)):  # TOKEN_QUERY
+        return None
+    val, ret = W.DWORD(), W.DWORD()
+    ok = advapi32.GetTokenInformation(tok, 20, ctypes.byref(val), 4, ctypes.byref(ret))  # TokenElevation
+    kernel32.CloseHandle(tok)
+    return bool(val.value) if ok else None
+
+
+def self_elevated():
+    return bool(_token_elevated(kernel32.GetCurrentProcess()))
+
+
+def process_elevated(pid):
+    h = kernel32.OpenProcess(0x1000, False, pid)
+    if not h:
+        return False
+    try:
+        return bool(_token_elevated(h))  # unknown -> try anyway; SendInput reports a UIPI block
+    finally:
+        kernel32.CloseHandle(h)
+
+
+# ------------------------------------------------------------------ clipboard
+CF_TEXT, CF_OEMTEXT, CF_UNICODETEXT, CF_LOCALE = 1, 7, 13, 16
+GDI_FORMATS = {2, 3, 9, 14, 0x80, 0x82, 0x83, 0x8E}  # handles, not memory: can't be copied as bytes
+MAX_SNAPSHOT = 64 * 1024 * 1024
+_markers = {}
+
+
+def _fmt(name):
+    if name not in _markers:
+        _markers[name] = user32.RegisterClipboardFormatW(name)
+    return _markers[name]
+
+
+def _open(retries=25):
+    for _ in range(retries):
+        if user32.OpenClipboard(None):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _put(fmt, data):
+    h = kernel32.GlobalAlloc(0x0002, max(len(data), 1))  # GMEM_MOVEABLE
+    if not h:
+        return False
+    p = kernel32.GlobalLock(h)
+    ctypes.memmove(p, data, len(data))
+    kernel32.GlobalUnlock(h)
+    if not user32.SetClipboardData(fmt, h):
+        kernel32.GlobalFree(h)
+        return False
+    return True
+
+
+def _put_history_markers():
+    # Keep dictations out of Win+V clipboard history and cloud clipboard (Wispr sets the same markers).
+    zero = (0).to_bytes(4, "little")
+    _put(_fmt("ExcludeClipboardContentFromMonitorProcessing"), zero)
+    _put(_fmt("CanIncludeInClipboardHistory"), zero)
+    _put(_fmt("CanUploadToCloudClipboard"), zero)
+
+
+def sequence():
+    return user32.GetClipboardSequenceNumber()
+
+
+def snapshot():
+    """Copy every memory-backed clipboard format so it can be put back after the paste."""
+    items, total = [], 0
+    if not _open():
+        return None
+    try:
+        fmts, f = [], 0
+        while True:
+            f = user32.EnumClipboardFormats(f)
+            if not f:
+                break
+            fmts.append(f)
+        has_unicode = CF_UNICODETEXT in fmts
+        for f in fmts:
+            if f in GDI_FORMATS or 0x200 <= f <= 0x3FF:
+                continue
+            if has_unicode and f in (CF_TEXT, CF_OEMTEXT, CF_LOCALE):
+                continue  # Windows re-creates these from the Unicode text
+            h = user32.GetClipboardData(f)
+            if not h:
+                continue
+            size = kernel32.GlobalSize(h)
+            if not size or total + size > MAX_SNAPSHOT:
+                continue
+            p = kernel32.GlobalLock(h)
+            if not p:
+                continue
+            items.append((f, ctypes.string_at(p, size)))
+            kernel32.GlobalUnlock(h)
+            total += size
+    finally:
+        user32.CloseClipboard()
+    return items
+
+
+def restore(items):
+    if items is None or not _open():
+        return False
+    try:
+        user32.EmptyClipboard()
+        for f, data in items:
+            _put(f, data)
+        if items:
+            _put_history_markers()
+    finally:
+        user32.CloseClipboard()
+    return True
+
+
+def set_text(text, private=True):
+    if not _open():
+        raise OSError("Clipboard is busy")
+    try:
+        user32.EmptyClipboard()
+        _put(CF_UNICODETEXT, (text.replace("\r\n", "\n").replace("\n", "\r\n") + "\0").encode("utf-16-le"))
+        if private:
+            _put_history_markers()
+    finally:
+        user32.CloseClipboard()
+    return sequence()
+
+
+def get_text():
+    if not _open():
+        return ""
+    try:
+        h = user32.GetClipboardData(CF_UNICODETEXT)
+        if not h:
+            return ""
+        p = kernel32.GlobalLock(h)
+        if not p:
+            return ""
+        s = ctypes.wstring_at(p)
+        kernel32.GlobalUnlock(h)
+        return s.replace("\r\n", "\n")
+    finally:
+        user32.CloseClipboard()
+
+
+# ------------------------------------------------------------------ paste / copy
+def paste(text, cfg, target=None, saved=None):
+    """Insert text into the focused app. Returns a dict describing what happened."""
+    proc, title, pid = target or foreground()
+    keys = textproc.pick_paste_keys(proc, cfg.get("shift_insert_in_editors", False))
+    delay = textproc.restore_delay(proc)
+    wait_modifiers_released()
+    restore_on = cfg.get("restore_clipboard", True)
+    if saved is None and restore_on:
+        saved = snapshot()
+    seq = set_text(text)
+    elevated = process_elevated(pid) and not self_elevated()
+    if elevated:
+        # UIPI blocks our keystrokes into admin windows: leave the text on the clipboard instead.
+        return {"proc": proc, "keys": "none", "delay": 0, "status": "elevated"}
+    if not send_combo(keys):  # blocked (UIPI) or no input desktop: the text stays on the clipboard
+        return {"proc": proc, "keys": "none", "delay": 0, "status": "blocked"}
+    time.sleep(0.05)  # Wispr: "sleeping for 50 ms for paste to complete"
+    if restore_on and saved is not None:
+        def _restore():
+            if sequence() == seq:  # "Clipboard changed since paste, skipping restoration"
+                restore(saved)
+        threading.Timer(delay, _restore).start()
+    return {"proc": proc, "keys": "+".join(keys), "delay": delay, "status": "ok"}
+
+
+def copy_selection(timeout=0.5):
+    """Ctrl+C the current selection. Returns (selected_text, clipboard_snapshot_to_restore)."""
+    wait_modifiers_released()
+    saved = snapshot()
+    before = sequence()
+    send_combo(("ctrl", "c"))
+    end = time.time() + timeout
+    while time.time() < end and sequence() == before:
+        time.sleep(0.02)
+    text = get_text() if sequence() != before else ""
+    return text, saved
+
+
+# ------------------------------------------------------------------ keyboard hook
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [("vkCode", W.DWORD), ("scanCode", W.DWORD), ("flags", W.DWORD), ("time", W.DWORD),
+                ("dwExtraInfo", ULONG_PTR)]
+
+
+HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, W.WPARAM, W.LPARAM)
+_proto(user32.SetWindowsHookExW, HANDLE, ctypes.c_int, HOOKPROC, HANDLE, W.DWORD)
+
+
+class KeyboardHook(threading.Thread):
+    """WH_KEYBOARD_LL hook on its own message-pumping thread. handler(vk, is_down) -> swallow?"""
+
+    def __init__(self, handler):
+        super().__init__(daemon=True, name="keyboard-hook")
+        self.handler = handler
+        self.tid = None
+        self.ok = threading.Event()
+        self.error = None
+
+    def _cb(self, code, wparam, lparam):
+        try:
+            if code == 0:
+                kb = ctypes.cast(lparam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                if kb.dwExtraInfo != MAGIC and wparam in (0x100, 0x101, 0x104, 0x105):
+                    if self.handler(kb.vkCode, wparam in (0x100, 0x104)):
+                        return 1
+        except Exception as e:  # never let an exception break the user's keyboard
+            print("hook error:", e, file=sys.stderr)
+        return user32.CallNextHookEx(None, code, wparam, lparam)
+
+    def run(self):
+        self.tid = kernel32.GetCurrentThreadId()
+        self._proc = HOOKPROC(self._cb)  # keep a reference or it gets garbage collected
+        self.hook = user32.SetWindowsHookExW(13, self._proc, kernel32.GetModuleHandleW(None), 0)
+        if not self.hook:
+            self.error = f"SetWindowsHookExW failed ({ctypes.get_last_error()})"
+            self.ok.set()
+            return
+        self.ok.set()
+        msg = W.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            pass
+        user32.UnhookWindowsHookEx(self.hook)
+
+    def stop(self):
+        if self.tid:
+            user32.PostThreadMessageW(self.tid, 0x0012, 0, 0)  # WM_QUIT
+
+
+# ------------------------------------------------------------------ windows & system
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", W.DWORD), ("rcMonitor", W.RECT), ("rcWork", W.RECT), ("dwFlags", W.DWORD)]
+
+
+_proto(user32.GetMonitorInfoW, W.BOOL, HANDLE, ctypes.POINTER(MONITORINFO))
+
+
+def work_area_at_cursor():
+    pt = W.POINT()
+    user32.GetCursorPos(ctypes.byref(pt))
+    mon = user32.MonitorFromPoint(pt, 2)  # MONITOR_DEFAULTTONEAREST
+    mi = MONITORINFO()
+    mi.cbSize = ctypes.sizeof(MONITORINFO)
+    user32.GetMonitorInfoW(mon, ctypes.byref(mi))
+    r = mi.rcWork
+    return r.left, r.top, r.right, r.bottom
+
+
+def make_overlay_window(tk_window):
+    """No focus stealing: WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST on the Tk frame window."""
+    tk_window.update_idletasks()
+    hwnd = user32.GetParent(tk_window.winfo_id()) or tk_window.winfo_id()
+    ex = user32.GetWindowLongPtrW(hwnd, -20)
+    user32.SetWindowLongPtrW(hwnd, -20, ex | 0x08000000 | 0x00000080 | 0x00000008)
+    user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0020)  # TOPMOST, no move/size/activate
+    return hwnd
+
+
+def set_dpi_aware():
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+_mutex = None
+
+
+def single_instance():
+    global _mutex
+    _mutex = kernel32.CreateMutexW(None, False, "Local\\AquaLiteSingleInstance")
+    return ctypes.get_last_error() != 183  # ERROR_ALREADY_EXISTS
+
+
+_proto(kernel32.CreateEventW, HANDLE, ctypes.c_void_p, W.BOOL, W.BOOL, W.LPCWSTR)
+_proto(kernel32.SetEvent, W.BOOL, HANDLE)
+_proto(kernel32.WaitForSingleObject, W.DWORD, HANDLE, W.DWORD)
+OPEN_EVENT = "Local\\AquaLiteOpenSettings"
+
+
+def ask_running_instance_to_open():
+    """Second launch (e.g. from the Start menu): tell the running copy to show its Settings window."""
+    h = kernel32.CreateEventW(None, False, False, OPEN_EVENT)
+    ok = bool(h) and ctypes.get_last_error() == 183  # the running copy created it
+    if h:
+        kernel32.SetEvent(h)
+    return ok
+
+
+def watch_open_requests(callback):
+    h = kernel32.CreateEventW(None, False, False, OPEN_EVENT)
+
+    def loop():
+        while kernel32.WaitForSingleObject(h, 0xFFFFFFFF) == 0:
+            callback()
+    threading.Thread(target=loop, daemon=True, name="open-requests").start()
+
+
+def startup_shortcut_path():
+    return os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs\Startup\Aqua Lite.lnk")
+
+
+def set_startup(enabled, script_path, icon_path=""):
+    lnk = startup_shortcut_path()
+    if not enabled:
+        if os.path.exists(lnk):
+            os.remove(lnk)
+        return
+    exe = sys.executable
+    if exe.lower().endswith("python.exe"):
+        exe = exe[:-10] + "pythonw.exe"
+    ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');"
+          f"$s.TargetPath='{exe}';$s.Arguments='\"{script_path}\"';"
+          f"$s.WorkingDirectory='{os.path.dirname(script_path)}';"
+          + (f"$s.IconLocation='{icon_path}';" if icon_path else "") + "$s.Save()")
+    subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                   creationflags=0x08000000, check=False)
+
+
+# ------------------------------------------------------------------ per-pixel-alpha window (soft glass edges)
+gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [("biSize", W.DWORD), ("biWidth", W.LONG), ("biHeight", W.LONG), ("biPlanes", W.WORD),
+                ("biBitCount", W.WORD), ("biCompression", W.DWORD), ("biSizeImage", W.DWORD),
+                ("biXPelsPerMeter", W.LONG), ("biYPelsPerMeter", W.LONG), ("biClrUsed", W.DWORD),
+                ("biClrImportant", W.DWORD)]
+
+
+class BLENDFUNCTION(ctypes.Structure):
+    _fields_ = [("BlendOp", ctypes.c_ubyte), ("BlendFlags", ctypes.c_ubyte),
+                ("SourceConstantAlpha", ctypes.c_ubyte), ("AlphaFormat", ctypes.c_ubyte)]
+
+
+_proto(user32.GetDC, HANDLE, W.HWND)
+_proto(user32.ReleaseDC, ctypes.c_int, W.HWND, HANDLE)
+_proto(gdi32.CreateCompatibleDC, HANDLE, HANDLE)
+_proto(gdi32.DeleteDC, W.BOOL, HANDLE)
+_proto(gdi32.CreateDIBSection, HANDLE, HANDLE, ctypes.POINTER(BITMAPINFOHEADER), W.UINT,
+       ctypes.POINTER(ctypes.c_void_p), HANDLE, W.DWORD)
+_proto(gdi32.SelectObject, HANDLE, HANDLE, HANDLE)
+_proto(gdi32.DeleteObject, W.BOOL, HANDLE)
+_proto(user32.UpdateLayeredWindow, W.BOOL, W.HWND, HANDLE, ctypes.POINTER(W.POINT), ctypes.POINTER(W.SIZE),
+       HANDLE, ctypes.POINTER(W.POINT), W.DWORD, ctypes.POINTER(BLENDFUNCTION), W.DWORD)
+
+
+def window_dpi_scale(hwnd):
+    try:
+        return max(1.0, user32.GetDpiForWindow(W.HWND(hwnd)) / 96.0)
+    except Exception:
+        return 1.0
+
+
+def make_layered(hwnd):
+    ex = user32.GetWindowLongPtrW(hwnd, -20)
+    user32.SetWindowLongPtrW(hwnd, -20, ex | 0x00080000 | 0x08000000 | 0x00000080 | 0x00000008)
+
+
+def update_layered(hwnd, x, y, w, h, bgra):
+    """Show a premultiplied BGRA image as the window's pixels, with per-pixel transparency."""
+    screen = user32.GetDC(None)
+    mem = gdi32.CreateCompatibleDC(screen)
+    bmi = BITMAPINFOHEADER(ctypes.sizeof(BITMAPINFOHEADER), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+    bits = ctypes.c_void_p()
+    hbmp = gdi32.CreateDIBSection(mem, ctypes.byref(bmi), 0, ctypes.byref(bits), None, 0)
+    ok = False
+    if hbmp and bits:
+        ctypes.memmove(bits, bgra, w * h * 4)
+        old = gdi32.SelectObject(mem, hbmp)
+        blend = BLENDFUNCTION(0, 0, 255, 1)  # AC_SRC_OVER, per-pixel AC_SRC_ALPHA
+        ok = bool(user32.UpdateLayeredWindow(hwnd, screen, ctypes.byref(W.POINT(x, y)), ctypes.byref(W.SIZE(w, h)),
+                                             mem, ctypes.byref(W.POINT(0, 0)), 0, ctypes.byref(blend), 2))
+        gdi32.SelectObject(mem, old)
+        gdi32.DeleteObject(hbmp)
+    gdi32.DeleteDC(mem)
+    user32.ReleaseDC(None, screen)
+    return ok

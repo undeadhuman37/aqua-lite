@@ -1,0 +1,331 @@
+"""Frutiger Aero look: glossy aqua glass, sky gradients, orbs and bubbles - all drawn with Pillow."""
+import math
+import os
+import random
+import sys
+
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+SS = 2  # supersampling for smooth edges
+
+# palette: sky, aqua, lime and white gloss
+SKY_TOP, SKY_BOTTOM = (156, 226, 255), (18, 132, 210)
+RIM = (8, 74, 132)
+ORB = {
+    "recording": ((190, 255, 120), (40, 160, 20)),   # lime orb = listening
+    "command": ((236, 200, 255), (128, 60, 210)),    # violet orb = Command Mode
+    "info": ((190, 235, 255), (20, 120, 220)),
+    "ok": ((190, 255, 170), (30, 160, 70)),
+    "warn": ((255, 236, 160), (230, 150, 20)),
+    "error": ((255, 190, 180), (210, 40, 40)),
+}
+
+
+def _font(size):
+    for name in ("segoeuisb.ttf", "segoeui.ttf", "seguisb.ttf", "DejaVuSans.ttf", "arial.ttf"):
+        for base in (os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"), "/usr/share/fonts/truetype/dejavu", ""):
+            try:
+                return ImageFont.truetype(os.path.join(base, name) if base else name, size)
+            except OSError:
+                continue
+    return ImageFont.load_default()
+
+
+def vgradient(w, h, top, bottom):
+    """Vertical gradient image (RGBA). Colours may be RGB or RGBA tuples."""
+    top = tuple(top) + (255,) * (4 - len(top))
+    bottom = tuple(bottom) + (255,) * (4 - len(bottom))
+    col = Image.new("RGBA", (1, max(h, 1)))
+    px = col.load()
+    for y in range(h):
+        t = y / max(h - 1, 1)
+        px[0, y] = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(4))
+    return col.resize((max(w, 1), max(h, 1)))
+
+
+def capsule_mask(size, box, radius):
+    m = Image.new("L", size, 0)
+    ImageDraw.Draw(m).rounded_rectangle(box, radius=radius, fill=255)
+    return m
+
+
+def glass_capsule(size, box, top=SKY_TOP, bottom=SKY_BOTTOM, glow=None, shadow=True):
+    """Returns (base, overlay): base = shadow + glass body, overlay = gloss + rims (drawn over contents)."""
+    W, H = size
+    x0, y0, x1, y1 = box
+    h = y1 - y0
+    r = h // 2
+    base = Image.new("RGBA", size, (0, 0, 0, 0))
+    if shadow:
+        sh = capsule_mask(size, (x0, y0 + 3 * SS, x1, y1 + 3 * SS), r).filter(ImageFilter.GaussianBlur(5 * SS))
+        base.paste((0, 30, 60, 110), (0, 0), sh)
+    if glow:
+        g = capsule_mask(size, (x0 - 2 * SS, y0 - 2 * SS, x1 + 2 * SS, y1 + 2 * SS), r + 2 * SS)
+        g = g.filter(ImageFilter.GaussianBlur(6 * SS))
+        layer = Image.new("RGBA", size, glow + (0,))
+        layer.putalpha(g.point(lambda v: int(v * 0.75)))
+        base = Image.alpha_composite(base, layer)
+    body = vgradient(x1 - x0, h, top, bottom)
+    base.paste(body, (x0, y0), capsule_mask((x1 - x0, h), (0, 0, x1 - x0 - 1, h - 1), r))
+    # soft light bouncing up from the bottom (the "water" reflection)
+    refl = vgradient(x1 - x0, h // 2, (120, 255, 255, 0), (170, 255, 255, 120))
+    rm = capsule_mask((x1 - x0, h), (0, 0, x1 - x0 - 1, h - 1), r).crop((0, h - h // 2, x1 - x0, h))
+    base.alpha_composite(Image.composite(refl, Image.new("RGBA", refl.size, (0, 0, 0, 0)), rm), (x0, y0 + h - h // 2))
+
+    over = Image.new("RGBA", size, (0, 0, 0, 0))
+    inset = max(2 * SS, h // 14)
+    gh = int(h * 0.5)
+    gloss = vgradient(x1 - x0 - 2 * inset, gh, (255, 255, 255, 215), (255, 255, 255, 35))
+    gm = capsule_mask(gloss.size, (0, 0, gloss.size[0] - 1, gh * 2), max(r - inset, 1))
+    over.paste(gloss, (x0 + inset, y0 + inset // 2 + SS), gm)
+    d = ImageDraw.Draw(over)
+    d.rounded_rectangle(box, radius=r, outline=RIM + (210,), width=SS)
+    d.rounded_rectangle((x0 + SS, y0 + SS, x1 - SS, y1 - SS), radius=r - SS, outline=(255, 255, 255, 110), width=SS)
+    return base, over
+
+
+def orb(img, cx, cy, r, colors, pulse=0.0):
+    """Glossy marble with a highlight, like an Aero button."""
+    top, bottom = colors
+    if pulse > 0:
+        g = Image.new("L", img.size, 0)
+        ImageDraw.Draw(g).ellipse((cx - r * 1.8, cy - r * 1.8, cx + r * 1.8, cy + r * 1.8), fill=int(140 * pulse))
+        g = g.filter(ImageFilter.GaussianBlur(r * 0.6))
+        layer = Image.new("RGBA", img.size, bottom + (0,))
+        layer.putalpha(g)
+        img.alpha_composite(layer)
+    size = int(r * 2)
+    body = vgradient(size, size, top, bottom)
+    m = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(m).ellipse((0, 0, size - 1, size - 1), fill=255)
+    img.paste(body, (int(cx - r), int(cy - r)), m)
+    d = ImageDraw.Draw(img)
+    d.ellipse((cx - r, cy - r, cx + r, cy + r), outline=(0, 60, 40, 160) if colors == ORB["recording"] else (20, 40, 90, 150), width=SS)
+    hl = vgradient(int(r * 1.3), int(r * 0.8), (255, 255, 255, 235), (255, 255, 255, 30))
+    hm = Image.new("L", hl.size, 0)
+    ImageDraw.Draw(hm).ellipse((0, 0, hl.size[0] - 1, hl.size[1] - 1), fill=255)
+    img.paste(hl, (int(cx - r * 0.65), int(cy - r * 0.9)), hm)
+
+
+class Bubbles:
+    def __init__(self):
+        self.items = []
+
+    def step(self, box, level, rate=1.0):
+        x0, y0, x1, y1 = box
+        if random.random() < (0.08 + level * 0.9) * rate:
+            r = random.uniform(1.6, 4.2) * SS
+            self.items.append([random.uniform(x0 + 20 * SS, x1 - 20 * SS), y1 - r, r,
+                               random.uniform(0.5, 1.4) * SS * (1 + level * 2), random.uniform(0, 6.28)])
+        alive = []
+        for b in self.items:
+            b[1] -= b[3]
+            b[0] += math.sin(b[4] + b[1] / (9 * SS)) * 0.4 * SS
+            if b[1] > y0 + b[2]:
+                alive.append(b)
+        self.items = alive[-40:]
+
+    def draw(self, img):
+        d = ImageDraw.Draw(img)
+        for x, y, r, _vy, _p in self.items:
+            d.ellipse((x - r, y - r, x + r, y + r), outline=(255, 255, 255, 170), width=max(1, SS // 2 + 1),
+                      fill=(255, 255, 255, 35))
+            d.ellipse((x - r * 0.45, y - r * 0.6, x - r * 0.05, y - r * 0.2), fill=(255, 255, 255, 220))
+
+
+class FlowBarRenderer:
+    """Draws every Flow bar state into an RGBA image of size (W, H) * scale."""
+
+    W, H = 440, 80
+
+    def __init__(self, scale=1.0):
+        self.scale = scale
+        self.size = (int(self.W * scale), int(self.H * scale))
+        self.big = (self.size[0] * SS, self.size[1] * SS)
+        self.cache = {}
+        self.bubbles = Bubbles()
+        self.font = _font(int(12.5 * scale * SS))
+        self.small = _font(int(11 * scale * SS))
+
+    def _u(self, v):
+        return int(v * self.scale * SS)
+
+    def _box(self, w, h):
+        W, H = self.big
+        w, h = self._u(w), self._u(h)
+        cx = W // 2
+        y1 = H - self._u(12)
+        return (cx - w // 2, y1 - h, cx + w // 2, y1)
+
+    def _glass(self, key, w, h, **kw):
+        if key not in self.cache:
+            box = self._box(w, h)
+            self.cache[key] = (box,) + glass_capsule(self.big, box, **kw)
+        return self.cache[key]
+
+    def render(self, state, label="", levels=(), tick=0, kind="info"):
+        if state == "hidden":
+            return Image.new("RGBA", self.size, (0, 0, 0, 0))
+        if state == "idle":
+            box, base, over = self._glass("idle", 60, 15)
+            img = Image.alpha_composite(base, over)
+            return img.resize(self.size, Image.LANCZOS)
+        if state in ("recording", "locked", "command"):
+            wide = state != "recording"
+            w = 258 if wide else 184
+            glow = (170, 120, 255) if state == "command" else (90, 230, 255)
+            box, base, over = self._glass(("rec", state), w, 42, glow=glow)
+            img = base.copy()
+            lv = levels[-1] if levels else 0.0
+            self.bubbles.step(box, lv)
+            layer = Image.new("RGBA", self.big, (0, 0, 0, 0))
+            self.bubbles.draw(layer)
+            mkey = ("mask", state)
+            if mkey not in self.cache:
+                self.cache[mkey] = capsule_mask(self.big, box, (box[3] - box[1]) // 2)
+            layer.putalpha(Image.composite(layer.getchannel("A"), Image.new("L", self.big, 0), self.cache[mkey]))
+            img.alpha_composite(layer)
+            x0, y0, x1, y1 = box
+            cy = (y0 + y1) // 2
+            pulse = 0.5 + 0.5 * math.sin(tick / 4.5)
+            orb(img, x0 + self._u(22), cy, self._u(9), ORB["command" if state == "command" else "recording"], pulse)
+            d = ImageDraw.Draw(img)
+            bx = x0 + self._u(42)
+            for i, v in enumerate(levels):
+                hh = self._u(3 + v * 22)
+                x = bx + i * self._u(7)
+                d.rounded_rectangle((x - self._u(1.6), cy - hh // 2 + self._u(1), x + self._u(1.6), cy + hh // 2 + self._u(1)),
+                                    radius=self._u(1.6), fill=(0, 70, 130, 70))
+                d.rounded_rectangle((x - self._u(1.6), cy - hh // 2, x + self._u(1.6), cy + hh // 2),
+                                    radius=self._u(1.6), fill=(255, 255, 255, 245))
+            if wide:
+                tag = "Command" if state == "command" else "Hands-free"
+                tx = bx + len(levels) * self._u(7) + self._u(6)
+                d.text((tx + SS, cy + SS), tag, font=self.small, fill=(0, 60, 110, 120), anchor="lm")
+                d.text((tx, cy), tag, font=self.small, fill=(255, 255, 255, 250), anchor="lm")
+                orb(img, x1 - self._u(22), cy, self._u(8), ((255, 255, 255), (150, 200, 230)))
+                d = ImageDraw.Draw(img)
+                s = self._u(3.2)
+                d.rounded_rectangle((x1 - self._u(22) - s, cy - s, x1 - self._u(22) + s, cy + s), radius=SS,
+                                    fill=(20, 90, 150, 230))
+            img.alpha_composite(over)
+            return img.resize(self.size, Image.LANCZOS)
+        if state == "processing":
+            box, base, over = self._glass("proc", 100, 36, glow=(90, 230, 255))
+            img = base.copy()
+            x0, y0, x1, y1 = box
+            cy = (y0 + y1) // 2
+            for i in range(3):
+                ph = tick / 5.0 - i * 0.9
+                dy = -abs(math.sin(ph)) * self._u(6)
+                orb(img, (x0 + x1) // 2 + (i - 1) * self._u(18), cy + self._u(2) + dy, self._u(5.5),
+                    ((255, 255, 255), (120, 210, 255)))
+            img.alpha_composite(over)
+            return img.resize(self.size, Image.LANCZOS)
+        # toast
+        text = label[:64]
+        tw = self.font.getlength(text) / (self.scale * SS)
+        w = min(self.W - 16, int(tw) + 64)
+        box, base, over = self._glass(("toast", w), w, 36)
+        img = base.copy()
+        x0, y0, x1, y1 = box
+        cy = (y0 + y1) // 2
+        orb(img, x0 + self._u(18), cy, self._u(6.5), ORB.get(kind, ORB["info"]))
+        d = ImageDraw.Draw(img)
+        tx = x0 + self._u(32)
+        d.text((tx + SS, cy + SS), text, font=self.font, fill=(0, 50, 100, 140), anchor="lm")
+        d.text((tx, cy), text, font=self.font, fill=(255, 255, 255, 255), anchor="lm")
+        img.alpha_composite(over)
+        return img.resize(self.size, Image.LANCZOS)
+
+
+def premultiplied_bgra(img):
+    import numpy as np
+    a = np.asarray(img, dtype=np.uint16)
+    alpha = a[..., 3:4]
+    rgb = (a[..., :3] * alpha + 127) // 255
+    out = np.concatenate([rgb[..., ::-1], alpha], axis=2).astype(np.uint8)
+    return out.tobytes()
+
+
+# ---------------------------------------------------------------- app art
+def sky_banner(w, h, title="Aqua Lite", subtitle="Speak anywhere you can type"):
+    """Header art: sky -> aqua water, sun glow, bubbles, glossy title."""
+    W, H = w * SS, h * SS
+    img = vgradient(W, H, (120, 205, 255), (0, 150, 210))
+    # horizon water
+    water = vgradient(W, H // 2, (40, 190, 230, 0), (0, 120, 190, 200))
+    img.alpha_composite(water, (0, H - H // 2))
+    # sun glow
+    glow = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(glow).ellipse((W * 0.62, -H * 0.6, W * 1.1, H * 0.9), fill=200)
+    glow = glow.filter(ImageFilter.GaussianBlur(H * 0.25))
+    sun = Image.new("RGBA", (W, H), (255, 255, 230, 0))
+    sun.putalpha(glow)
+    img.alpha_composite(sun)
+    # swooshes
+    sw = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(sw)
+    for i, a in enumerate((70, 45, 30)):
+        d.arc((-W * 0.2, H * (0.35 + i * 0.12), W * 1.2, H * (1.9 + i * 0.12)), 190, 350, fill=(255, 255, 255, a), width=6 * SS)
+    img.alpha_composite(sw.filter(ImageFilter.GaussianBlur(SS)))
+    # bubbles
+    rnd = random.Random(7)
+    bub = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(bub)
+    for _ in range(26):
+        r = rnd.uniform(4, 22) * SS
+        x, y = rnd.uniform(W * 0.35, W), rnd.uniform(0, H)
+        d.ellipse((x - r, y - r, x + r, y + r), outline=(255, 255, 255, 150), width=SS, fill=(255, 255, 255, 28))
+        d.ellipse((x - r * 0.55, y - r * 0.65, x - r * 0.1, y - r * 0.25), fill=(255, 255, 255, 190))
+    img.alpha_composite(bub)
+    # glossy title orb + text
+    orb(img, int(H * 0.5), H // 2, int(H * 0.32), ((200, 255, 140), (30, 160, 40)))
+    d = ImageDraw.Draw(img)
+    f1, f2 = _font(int(h * 0.36 * SS)), _font(int(h * 0.17 * SS))
+    tx = int(H * 0.95)
+    d.text((tx + 2 * SS, H * 0.42 + 2 * SS), title, font=f1, fill=(0, 60, 110, 120), anchor="lm")
+    d.text((tx, H * 0.42), title, font=f1, fill=(255, 255, 255, 255), anchor="lm")
+    d.text((tx + 2, H * 0.73), subtitle, font=f2, fill=(235, 250, 255, 240), anchor="lm")
+    gloss = vgradient(W, H // 2, (255, 255, 255, 90), (255, 255, 255, 0))
+    img.alpha_composite(gloss)
+    return img.resize((w, h), Image.LANCZOS)
+
+
+def glossy_button(w, h, state="normal"):
+    tops = {"normal": (215, 245, 255), "active": (235, 252, 255), "pressed": (120, 200, 240)}
+    bottoms = {"normal": (60, 165, 225), "active": (90, 195, 245), "pressed": (30, 120, 190)}
+    W, H = w * SS, h * SS
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    base, over = glass_capsule((W, H), (SS, SS, W - SS - 1, H - 2 * SS), tops[state], bottoms[state], shadow=False)
+    img = Image.alpha_composite(Image.alpha_composite(img, base), over)
+    return img.resize((w, h), Image.LANCZOS)
+
+
+def app_icon(size=256):
+    """Glossy aqua rounded square with a white waveform."""
+    S = size * SS
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    r = S // 4
+    body = vgradient(S - 4 * SS, S - 4 * SS, (150, 230, 255), (0, 120, 205))
+    img.paste(body, (2 * SS, 2 * SS), capsule_mask(body.size, (0, 0, body.size[0] - 1, body.size[1] - 1), r))
+    d = ImageDraw.Draw(img)
+    heights = (0.26, 0.5, 0.74, 0.5, 0.26)
+    bw = S / 11
+    for i, hh in enumerate(heights):
+        x = S / 2 + (i - 2) * bw * 1.85
+        H = hh * S * 0.62
+        d.rounded_rectangle((x - bw / 2, S / 2 - H / 2, x + bw / 2, S / 2 + H / 2), radius=bw / 2, fill=(255, 255, 255, 250))
+    gloss = vgradient(S - 10 * SS, int(S * 0.46), (255, 255, 255, 200), (255, 255, 255, 25))
+    img.paste(gloss, (5 * SS, 4 * SS), capsule_mask(gloss.size, (0, 0, gloss.size[0] - 1, gloss.size[1] * 2), r - 3 * SS))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle((2 * SS, 2 * SS, S - 2 * SS - 1, S - 2 * SS - 1), radius=r, outline=RIM + (220,), width=max(SS, S // 90))
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def write_icon(path):
+    app_icon(256).save(path, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+
+
+if __name__ == "__main__" and len(sys.argv) > 1:
+    write_icon(sys.argv[1])
