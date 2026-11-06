@@ -38,6 +38,7 @@ def _pair_combo(parent, pairs, value, width=28):
 
 
 BG, PANEL, INK, MUTED, ACCENT = "#eaf6ff", "#f7fcff", "#0b3d63", "#4d7391", "#0a84c6"
+_BUTTON_IMAGES = {}
 
 
 def apply_aero_style(win, keep):
@@ -68,13 +69,15 @@ def apply_aero_style(win, keep):
     st.configure("Tile.TFrame", background="white", bordercolor="#9fd0ee", relief="solid")
     st.configure("Tile.TLabel", background="white")
     st.configure("Muted.TLabel", foreground=MUTED)
-    imgs = {k: ImageTk.PhotoImage(aero.glossy_button(96, 30, k), master=win) for k in ("normal", "active", "pressed")}
-    keep.extend(imgs.values())
-    try:
+    # The button images must live as long as the app: ttk keeps using them for every later window,
+    # so they are created once and held at module level (not by the window, which gets garbage-collected).
+    if not _BUTTON_IMAGES:
+        root = win._root()
+        _BUTTON_IMAGES.update({k: ImageTk.PhotoImage(aero.glossy_button(96, 30, k), master=root)
+                               for k in ("normal", "active", "pressed")})
+        imgs = _BUTTON_IMAGES
         st.element_create("Aero.button", "image", imgs["normal"], ("pressed", imgs["pressed"]),
                           ("active", imgs["active"]), border=(15, 14, 15, 14), sticky="nsew")
-    except tk.TclError:
-        pass  # already created for an earlier window
     st.layout("TButton", [("Aero.button", {"sticky": "nsew", "children": [
         ("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]})])
     st.configure("TButton", padding=(16, 3), foreground="#063a5e", font=("Segoe UI Semibold", 10), anchor="center")
