@@ -98,7 +98,7 @@ class SettingsWindow:
         apply_aero_style(self.win, self._imgs)
         # size for the screen's scaling (125%, 150%...) so the bottom buttons are never cut off
         sc = max(1.0, self.win.winfo_fpixels("1i") / 96.0)
-        w, h = int(820 * sc), int(720 * sc)
+        w, h = int(820 * sc), int(720 * sc)  # noqa: re-checked against content size below
         h = min(h, self.win.winfo_screenheight() - int(60 * sc))
         self.win.geometry(f"{w}x{h}")
         self.win.minsize(int(700 * sc), int(560 * sc))
@@ -125,6 +125,11 @@ class SettingsWindow:
         ttk.Button(bar, text="Close", command=self.win.destroy).pack(side="right", padx=6)
         self.status = ttk.Label(bar, text="", foreground="#666")
         self.status.pack(side="left")
+        # grow the window to fit its content (fonts are bigger on 125%/150% scaled screens)
+        self.win.update_idletasks()
+        need_w, need_h = self.win.winfo_reqwidth(), self.win.winfo_reqheight()
+        max_h = self.win.winfo_screenheight() - 80
+        self.win.geometry(f"{max(w, need_w)}x{min(max(h, need_h + 10), max_h)}")
         self.win.lift()
         self.win.focus_force()
 
