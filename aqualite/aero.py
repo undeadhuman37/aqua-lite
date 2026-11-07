@@ -361,22 +361,71 @@ def app_icon(size=256):
     r = S // 4
     body = vgradient(S - 4 * SS, S - 4 * SS, (150, 230, 255), (0, 120, 205))
     img.paste(body, (2 * SS, 2 * SS), capsule_mask(body.size, (0, 0, body.size[0] - 1, body.size[1] - 1), r))
-    d = ImageDraw.Draw(img)
+    # glass shine on the top half: blended (its own transparency times the rounded mask), not pasted solid
+    gloss = vgradient(S - 10 * SS, int(S * 0.46), (255, 255, 255, 150), (255, 255, 255, 20))
+    gmask = capsule_mask(gloss.size, (0, 0, gloss.size[0] - 1, gloss.size[1] * 2), r - 3 * SS)
+    gloss.putalpha(Image.composite(gloss.getchannel("A"), Image.new("L", gloss.size, 0), gmask))
+    shine = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    shine.paste(gloss, (5 * SS, 4 * SS))
+    img.alpha_composite(shine)
+    # waveform with a soft shadow so it stays readable over the shine, even at 16 px
     heights = (0.26, 0.5, 0.74, 0.5, 0.26)
-    bw = S / 11
+    bw = S / 10
+    bars = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    shadow = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    db, ds = ImageDraw.Draw(bars), ImageDraw.Draw(shadow)
+    off = max(SS, S // 80)
     for i, hh in enumerate(heights):
-        x = S / 2 + (i - 2) * bw * 1.85
+        x = S / 2 + (i - 2) * bw * 1.8
         H = hh * S * 0.62
-        d.rounded_rectangle((x - bw / 2, S / 2 - H / 2, x + bw / 2, S / 2 + H / 2), radius=bw / 2, fill=(255, 255, 255, 250))
-    gloss = vgradient(S - 10 * SS, int(S * 0.46), (255, 255, 255, 200), (255, 255, 255, 25))
-    img.paste(gloss, (5 * SS, 4 * SS), capsule_mask(gloss.size, (0, 0, gloss.size[0] - 1, gloss.size[1] * 2), r - 3 * SS))
+        box = (x - bw / 2, S / 2 - H / 2, x + bw / 2, S / 2 + H / 2)
+        ds.rounded_rectangle((box[0], box[1] + off, box[2], box[3] + off), radius=bw / 2, fill=(0, 60, 120, 110))
+        db.rounded_rectangle(box, radius=bw / 2, fill=(255, 255, 255, 255))
+    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(1, S // 70))))
+    img.alpha_composite(bars)
     d = ImageDraw.Draw(img)
     d.rounded_rectangle((2 * SS, 2 * SS, S - 2 * SS - 1, S - 2 * SS - 1), radius=r, outline=RIM + (220,), width=max(SS, S // 90))
     return img.resize((size, size), Image.LANCZOS)
 
 
 def write_icon(path):
-    app_icon(256).save(path, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+    """Write a Windows .ico the way Windows' own icons are built: classic 32-bit bitmap entries for 16-128 px and a
+    PNG entry for 256 px. Explorer, shortcuts and exe resources don't reliably show PNG entries below 256 px, so
+    an all-PNG .ico (Pillow's default) can come out as a blank icon."""
+    import io
+    import struct
+    sizes = [16, 24, 32, 48, 64, 128, 256]
+    blobs = []
+    for size in sizes:
+        img = app_icon(size).convert("RGBA")
+        if size == 256:
+            buf = io.BytesIO()
+            img.save(buf, "PNG")
+            blobs.append(buf.getvalue())
+            continue
+        w = h = size
+        px = img.tobytes("raw", "BGRA")
+        rows = [px[y * w * 4:(y + 1) * w * 4] for y in range(h)][::-1]  # bitmaps are stored bottom-up
+        mask_stride = ((w + 31) // 32) * 4
+        alpha = img.getchannel("A").tobytes()
+        mask = bytearray()
+        for y in reversed(range(h)):  # AND mask: 1 = transparent (ignored for 32-bit, but must be present)
+            row = bytearray(mask_stride)
+            for x in range(w):
+                if alpha[y * w + x] == 0:
+                    row[x // 8] |= 0x80 >> (x % 8)
+            mask += row
+        xor = b"".join(rows)
+        header = struct.pack("<IiiHHIIiiII", 40, w, h * 2, 1, 32, 0, len(xor) + len(mask), 0, 0, 0, 0)
+        blobs.append(header + xor + bytes(mask))
+    out = struct.pack("<HHH", 0, 1, len(sizes))
+    offset = 6 + 16 * len(sizes)
+    for size, blob in zip(sizes, blobs):
+        d = size if size < 256 else 0  # 0 means 256
+        out += struct.pack("<BBBBHHII", d, d, 0, 0, 1, 32, len(blob), offset)
+        offset += len(blob)
+    with open(path, "wb") as f:
+        f.write(out + b"".join(blobs))
 
 
 if __name__ == "__main__" and len(sys.argv) > 1:

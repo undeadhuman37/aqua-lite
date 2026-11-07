@@ -27,6 +27,7 @@ It is not affiliated with or endorsed by Wispr AI, Inc.
 - **Careful pasting:** your clipboard (text, images, rich text) is restored afterwards, and dictations stay out of Win+V history.
 - **Music while you talk:** plays a random part of a song from your own music folder at 30% volume, then fades out.
 - **History and stats**, a tray menu, start-with-Windows, and every shortcut can be changed.
+- **Report a problem** from the tray: a ready-to-paste report with your dictations, keys and personal details left out.
 
 ## Install (Windows 10/11)
 

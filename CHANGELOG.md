@@ -3,6 +3,13 @@
 Headings are `## <version>` or `## <version> - <update name>`. The first line under each heading is what the app
 shows once after updating (keep it under 52 characters).
 
+## 1.3.1
+new app icon and a "Report a problem" button
+- **New icon** that shows up properly everywhere: the installer, Start menu, Desktop, taskbar and tray.
+  The old one could appear blank in Windows Explorer.
+- **Report a problem** in the tray menu: copies a report for the developer (version, settings, recent log) with
+  everything you dictated, your API keys, dictionary and Windows user name removed. It opens so you can see what's in it.
+
 ## 1.3.0 - Quality of Life Update
 live words, learns your fixes, undo & more
 - **Live words:** see what you're saying in a small bubble above the bar while you talk (offline preview model, no API calls).

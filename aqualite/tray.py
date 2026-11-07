@@ -25,6 +25,7 @@ class Tray:
             M("Copy last transcript", lambda: app.post("copy_last")),
             M(lambda _i: "Resume" if app.paused else "Pause shortcuts", lambda: app.post("toggle_pause")),
             M("Check for updates", lambda: app.post("check_updates")),
+            M("Report a problem", lambda: app.post("report_problem")),
             pystray.Menu.SEPARATOR,
             M("Quit Aqua Lite", lambda: app.post("quit")),
         ))

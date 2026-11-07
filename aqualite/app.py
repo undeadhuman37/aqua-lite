@@ -7,7 +7,7 @@ import threading
 import time
 import tkinter as tk
 
-from . import audio, config, deps, history, hotkeys, learn, live, llm, music, sounds, stt, textproc, updater
+from . import audio, config, deps, history, hotkeys, learn, live, llm, music, report, sounds, stt, textproc, updater
 from .overlay import FlowBar
 
 IS_WIN = sys.platform == "win32"
@@ -205,6 +205,35 @@ class App:
     def ev_bar(self, state):
         self.bar.set_state(state)
         self._tray("idle" if state == "idle" else state)
+
+    def ev_report_problem(self):
+        """Build a privacy-safe report, copy it, and open it so the user sees exactly what they'd share."""
+        status = {
+            "speech engine": stt.resolve_engine(self.cfg),
+            "local model": stt.LOCAL.status,
+            "AI formatting": llm.resolve_provider(self.cfg) or "off",
+            "live words model": ("failed" if live.PREVIEW.failed else
+                                 f"{live.PREVIEW.name} ready" if live.PREVIEW.model else "not loaded"),
+            "learning corrections": "off (UI Automation unavailable)" if self.learner.disabled else "available",
+            "packages up to date": deps.up_to_date() if deps.in_private_env() else "n/a (not an installed copy)",
+            "keyboard hook": (self.hook.error or "ok") if self.hook else "n/a",
+            "shortcuts paused": self.paused,
+            "self-update possible": updater.can_self_update(),
+        }
+        try:
+            path, text = report.write(self.cfg, status)
+        except Exception as e:
+            log.exception("report")
+            self.bar.toast(f"Couldn't build the report: {str(e)[:50]}", "error", 5)
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        if IS_WIN:
+            try:
+                os.startfile(path)
+            except OSError:
+                pass
+        self.bar.toast("Problem report copied - paste it into your message", "ok", 6)
 
     def ev_open_settings(self, tab=0):
         self.open_settings(tab)
@@ -442,7 +471,7 @@ class App:
                     self._learn(final, target)
         history.add(app=ctx["app"], title=ctx["title"][:200], mode=mode, raw=raw, final=final.strip(),
                     seconds=seconds, words=textproc.word_count(final), engine=engine, latency=latency, status=status)
-        log.info("%s %.1fs audio, %.2fs, %s [%s] -> %s: %r", mode, seconds, latency, engine, ctx["category"],
+        log.info("%s %.1fs audio, %.2fs, %s [%s] -> %s | text=%r", mode, seconds, latency, engine, ctx["category"],
                  result.get("keys"), final)
         if status in ("elevated", "blocked"):
             self.post("toast", "Can't type into this window - text copied, press Ctrl+V", "warn", 5)
@@ -463,7 +492,7 @@ class App:
         if s and s.win.winfo_exists():  # keep an open Settings window in sync so Save doesn't drop them
             for w in added:
                 s.dict_list.insert("end", w)
-        log.info("learned from a correction: %s", added)
+        log.info("learned from a correction | text=%s", added)
         self.bar.toast(f'Learned "{", ".join(added)[:34]}" - added to your dictionary', "ok", 4)
 
     def _format(self, raw, ctx):
@@ -479,7 +508,7 @@ class App:
                 if not textproc.looks_like_an_answer(protected, out):
                     text = out
                 else:
-                    log.warning("formatter output rejected: %r", out)
+                    log.warning("formatter output rejected | text=%r", out)
             except Exception as e:
                 log.warning("AI formatting failed, using offline cleanup: %s", e)
                 self.post("toast", "AI formatting unavailable - used offline cleanup", "warn")

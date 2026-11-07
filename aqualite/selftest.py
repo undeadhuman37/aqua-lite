@@ -215,6 +215,19 @@ def check_new_features():
     assert whats_new(VERSION)[1], "CHANGELOG.md has no entry for this version"
 
 
+def check_report():
+    from . import report
+    r = report.redact
+    assert r("dictation 2.1s audio, 0.9s, groq [personal] -> ctrl+v | text='call mom at 6 '").endswith("| text=[removed]")
+    assert r("INFO dictation 1.0s audio, 0.5s, local [other] -> ctrl+v: 'secret words'").endswith(": [removed]")
+    assert r("learned from a correction | text=['Patricio']").endswith("text=[removed]")
+    assert r("learned from a correction: ['Patricio']").endswith(": [removed]")
+    assert "gsk_" not in r("auth failed for gsk_abcdefghijklmnop1234")
+    assert r("update: installed 1.3.1, GitHub 1.3.1 (abc1234)") == "update: installed 1.3.1, GitHub 1.3.1 (abc1234)"
+    text = report.build({"groq_api_key": "gsk_secretsecret", "dictionary": ["Patricio"], "language": "auto"}, {"x": 1})
+    assert "gsk_secret" not in text and "Patricio" not in text and "language: auto" in text and "API keys set: groq" in text
+
+
 def check_updater():
     from . import updater
     pv, new = updater.parse_version, updater.is_newer
@@ -226,7 +239,8 @@ def check_updater():
 def main():
     for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
-                     ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features)):
+                     ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
+                     ("problem report", check_report)):
         fn()
         print(f"ok  {name}")
     if sys.platform == "win32":
