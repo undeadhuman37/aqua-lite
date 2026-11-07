@@ -18,8 +18,9 @@ log = logging.getLogger("aqualite")
 
 REPO = "undeadhuman37/aqua-lite"
 BRANCH = "main"
-VERSION_URL = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/VERSION"
-ZIP_URL = f"https://codeload.github.com/{REPO}/zip/refs/heads/{BRANCH}"
+HEAD_URL = f"https://api.github.com/repos/{REPO}/commits/{BRANCH}"            # newest commit id (not CDN-cached)
+VERSION_URL = "https://raw.githubusercontent.com/" + REPO + "/{ref}/VERSION"  # a commit id never goes stale
+ZIP_URL = "https://codeload.github.com/" + REPO + "/zip/{ref}"
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 SKIP = {".git", "__pycache__", ".venv", "venv"}
@@ -54,14 +55,32 @@ def can_self_update(app_dir=APP_DIR):
             and os.access(app_dir, os.W_OK))
 
 
-def check(url=None):
-    """Returns the newer version string from GitHub, or None if we're up to date."""
-    r = requests.get(url or VERSION_URL, timeout=8, headers={"Cache-Control": "no-cache"})
+def latest_ref():
+    """The newest commit on main. Asking for a commit id (instead of 'main') sidesteps GitHub's 5-minute file cache,
+    so an update is seen the moment it's pushed. Falls back to 'main' if the API is unavailable (e.g. rate limit)."""
+    try:
+        r = requests.get(HEAD_URL, timeout=8, headers={"Accept": "application/vnd.github.sha",
+                                                       "User-Agent": "AquaLite-updater"})
+        sha = r.text.strip()
+        if r.ok and re.fullmatch(r"[0-9a-f]{40}", sha):
+            return sha
+        log.info("update: GitHub API said %s, falling back to the branch", r.status_code)
+    except requests.RequestException as e:
+        log.info("update: GitHub API unreachable (%s), falling back to the branch", e)
+    return BRANCH
+
+
+def check(ref=None):
+    """Returns (newer version, commit) from GitHub, or None if we're up to date."""
+    ref = ref or latest_ref()
+    url = VERSION_URL.format(ref=ref) + (f"?nocache={os.getpid()}{id(ref)}" if ref == BRANCH else "")
+    r = requests.get(url, timeout=8, headers={"Cache-Control": "no-cache"})
     r.raise_for_status()
     remote = r.text.strip()
     if parse_version(remote) == (0, 0, 0):
         raise UpdateError(f"unreadable version on GitHub: {remote[:40]!r}")
-    return remote if is_newer(remote, local_version()) else None
+    log.info("update: installed %s, GitHub %s (%s)", local_version(), remote, ref[:7])
+    return (remote, ref) if is_newer(remote, local_version()) else None
 
 
 def console_python():
@@ -78,11 +97,11 @@ def _run(label, args, cwd, timeout):
     return p
 
 
-def download(url=None, work=None):
+def download(ref=BRANCH, work=None, url=None):
     """Download and unpack the repo zip. Returns the folder that contains AquaLite.pyw."""
     work = work or tempfile.mkdtemp(prefix="aqualite-update-")
     zpath = os.path.join(work, "update.zip")
-    with requests.get(url or ZIP_URL, timeout=30, stream=True) as r:
+    with requests.get(url or ZIP_URL.format(ref=ref), timeout=30, stream=True) as r:
         r.raise_for_status()
         with open(zpath, "wb") as f:
             for chunk in r.iter_content(1 << 16):
@@ -150,14 +169,15 @@ def update_now(on_found=None):
     """Full run. Returns the installed version, or None when already up to date."""
     if not can_self_update():
         raise UpdateError("this copy isn't an installed copy (run install.bat to install it)")
-    newer = check()
-    if not newer:
+    found = check()
+    if not found:
         return None
+    newer, ref = found
     if on_found:
         on_found(newer)
     work = tempfile.mkdtemp(prefix="aqualite-update-")
     try:
-        staged = download(work=work)
+        staged = download(ref, work=work)
         if not is_newer(local_version(staged), local_version()):
             return None  # GitHub's zip lagged behind its VERSION file; try again next launch
         return install(staged)
