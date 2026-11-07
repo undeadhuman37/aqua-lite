@@ -7,7 +7,7 @@ import threading
 import time
 import tkinter as tk
 
-from . import audio, config, history, hotkeys, llm, music, sounds, stt, textproc
+from . import audio, config, history, hotkeys, llm, music, sounds, stt, textproc, updater
 from .overlay import FlowBar
 
 IS_WIN = sys.platform == "win32"
@@ -19,8 +19,9 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class App:
-    def __init__(self):
+    def __init__(self, updated_to=None):
         self.cfg = config.load()
+        self.updating = False
         self.events = queue.Queue()
         self.jobs = queue.Queue()
         self.recorder = audio.Recorder()
@@ -66,7 +67,10 @@ class App:
             self.cfg.save()
             self.root.after(600, self.open_settings)
         ptt = self.cfg["hotkey_ptt"].upper().replace("+", " + ")
-        self.root.after(900, lambda: self.bar.toast(f"Aqua Lite is ready - hold {ptt} and talk", "ok", 4))
+        ready = f"Updated to {updated_to} - hold {ptt} and talk" if updated_to else f"Aqua Lite is ready - hold {ptt} and talk"
+        self.root.after(900, lambda: self.bar.toast(ready, "ok", 4))
+        if self.cfg.get("auto_update", True):
+            self.root.after(5000, lambda: self.check_for_updates(manual=False))
 
     # ------------------------------------------------------------------ plumbing
     def post(self, name, *args):
@@ -205,6 +209,50 @@ class App:
         if self.machine.recording:
             self.machine.reset()
             self.ev_hk_stop(self.rec_command)
+
+    # ------------------------------------------------------------------ updates
+    def ev_check_updates(self):
+        self.check_for_updates(manual=True)
+
+    def check_for_updates(self, manual=False):
+        if self.updating:
+            return
+        if not updater.can_self_update():
+            if manual:
+                self.bar.toast("Updates only work on an installed copy (run install.bat)", "warn", 5)
+            return
+        self.updating = True
+        if manual:
+            self.bar.toast("Checking for updates...", "info", 3)
+        threading.Thread(target=self._update_worker, args=(manual,), daemon=True, name="updater").start()
+
+    def _update_worker(self, manual):
+        try:
+            new = updater.update_now(on_found=lambda v: self.post("toast", f"Updating Aqua Lite to {v}...", "info", 6))
+            if new:
+                log.info("updated to %s, restarting", new)
+                self.post("restart_for_update", new)
+                return
+            if manual:
+                self.post("toast", f"You're on the latest version ({config.VERSION})", "ok")
+        except Exception as e:
+            log.warning("update failed: %s", e)
+            if manual:
+                self.post("toast", f"Update failed: {str(e)[:70]}", "error", 5)
+        self.updating = False
+
+    def ev_restart_for_update(self, version):
+        if self.machine.recording or self.bar.state == "processing":  # never cut off a dictation
+            self.root.after(2000, lambda: self.ev_restart_for_update(version))
+            return
+        try:
+            updater.restart(version)
+        except Exception as e:
+            log.error("restart after update failed: %s", e)
+            self.bar.toast(f"Updated to {version} - restart Aqua Lite to finish", "ok", 6)
+            self.updating = False
+            return
+        self.ev_quit()
 
     def _bar_clicked(self, state):
         if state == "idle":
@@ -363,10 +411,17 @@ def main():
     else:
         handlers.append(logging.StreamHandler())
     logging.basicConfig(level=logging.INFO, handlers=handlers, format="%(asctime)s %(levelname)s %(message)s")
+    argv = sys.argv[1:]
+    if "--wait-pid" in argv and IS_WIN:  # restarted by the updater: let the old copy exit first
+        try:
+            winapi.wait_for_exit(int(argv[argv.index("--wait-pid") + 1]), 20000)
+        except (ValueError, IndexError):
+            pass
+    updated_to = argv[argv.index("--updated") + 1] if "--updated" in argv[:-1] else None
     if IS_WIN and not winapi.single_instance():
         if not winapi.ask_running_instance_to_open():
             import ctypes
             ctypes.windll.user32.MessageBoxW(None, "Aqua Lite is already running (look for its icon in the tray).",
                                              "Aqua Lite", 0x40)
         return
-    App().run()
+    App(updated_to).run()

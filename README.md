@@ -33,7 +33,9 @@ It is not affiliated with or endorsed by Wispr AI, Inc.
 3. Optional: paste a [Groq API key](https://console.groq.com/keys) under **Settings > Speech & AI**. Transcription becomes
    near-instant, and AI formatting and Command Mode turn on.
 
-To update, run `install.bat` again. To remove everything, run `uninstall.bat`.
+Aqua Lite updates itself: every time it starts, it checks GitHub for a newer version, installs it and restarts
+(you'll see "Updated to ..." at the bottom of the screen). You can also pick **Check for updates** from the tray menu,
+or turn automatic updates off in Settings. Running `install.bat` again also updates. To remove everything, run `uninstall.bat`.
 
 ## Shortcuts
 
@@ -67,6 +69,13 @@ The paste step follows the behaviour documented in the teardown:
 - waits while modifier keys are held, and masks Win/Alt so the Start menu doesn't pop up
 
 Run `python AquaLite.pyw --selftest` to check the logic and the Windows integration without a microphone.
+
+### Updates
+
+On launch, the app reads [`VERSION`](VERSION) on the `main` branch. If it's higher than the installed one, it downloads
+the repository zip, installs any new packages, runs the new version's self-test, backs up the current copy to
+`%LOCALAPPDATA%\AquaLite\app.backup`, copies the new files over and restarts. If the self-test fails, nothing is changed.
+It never updates a git checkout. **To ship an update, push the changes and bump `VERSION`** (e.g. `1.1.0` to `1.2.0`).
 
 ## Credits
 

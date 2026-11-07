@@ -172,10 +172,18 @@ def check_windows():
     print(f"  running as admin: {winapi.self_elevated()}")
 
 
+def check_updater():
+    from . import updater
+    pv, new = updater.parse_version, updater.is_newer
+    assert pv("1.2.3") == (1, 2, 3) and pv("1.10") == (1, 10, 0) and pv("v2.0.1\n") == (2, 0, 1) and pv("x") == (0, 0, 0)
+    assert new("1.10.0", "1.9.9") and new("1.1.0", "1.0.0") and not new("1.0.0", "1.0.0") and not new("0.9", "1.0")
+    assert updater.parse_version(updater.local_version()) > (0, 0, 0), "VERSION file missing"
+
+
 def main():
     for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
-                     ("music shuffle", check_music)):
+                     ("music shuffle", check_music), ("updater", check_updater)):
         fn()
         print(f"ok  {name}")
     if sys.platform == "win32":

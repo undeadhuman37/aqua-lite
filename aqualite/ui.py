@@ -209,7 +209,8 @@ class SettingsWindow:
                            ("add_trailing_space", "Add a space after each dictation"),
                            ("restore_clipboard", "Restore my clipboard after pasting"),
                            ("shift_insert_in_editors", "Use Shift+Insert in VS Code / Cursor / Windsurf"),
-                           ("launch_at_startup", "Start Aqua Lite when Windows starts")):
+                           ("launch_at_startup", "Start Aqua Lite when Windows starts"),
+                           ("auto_update", "Update automatically when Aqua Lite starts")):
             ttk.Checkbutton(f, text=label, variable=self._var(key, tk.BooleanVar)).grid(
                 row=r, column=0, columnspan=3, sticky="w", pady=1)
             r += 1

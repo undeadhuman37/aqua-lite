@@ -5,7 +5,18 @@ import os
 import threading
 
 APP_NAME = "Aqua Lite"
-VERSION = "1.0.0"
+
+
+def _read_version():
+    try:
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "VERSION"),
+                  encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return "1.0.0"
+
+
+VERSION = _read_version()   # the VERSION file at the repo root; bump it to ship an update
 
 
 def data_dir():
@@ -79,6 +90,7 @@ DEFAULTS = {
     "restore_clipboard": True,
     "shift_insert_in_editors": False,    # Wispr's "shift-insert" flag: Shift+Insert in Code/Cursor/Windsurf
     "max_handsfree_minutes": 10,
+    "auto_update": True,                 # check GitHub for a newer version every time Aqua Lite starts
     "first_run": True,
     "settings_version": 2,
 }

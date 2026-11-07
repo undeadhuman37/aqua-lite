@@ -478,6 +478,18 @@ def watch_open_requests(callback):
     threading.Thread(target=loop, daemon=True, name="open-requests").start()
 
 
+def wait_for_exit(pid, timeout_ms):
+    """Block until process `pid` has exited (or the timeout passes)."""
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = HANDLE
+    k32.OpenProcess.argtypes = (W.DWORD, W.BOOL, W.DWORD)
+    k32.CloseHandle.argtypes = (HANDLE,)
+    h = k32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if h:
+        kernel32.WaitForSingleObject(h, timeout_ms)
+        k32.CloseHandle(h)
+
+
 def startup_shortcut_path():
     return os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs\Startup\Aqua Lite.lnk")
 
