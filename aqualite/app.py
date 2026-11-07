@@ -7,7 +7,7 @@ import threading
 import time
 import tkinter as tk
 
-from . import audio, config, history, hotkeys, llm, music, sounds, stt, textproc, updater
+from . import audio, config, deps, history, hotkeys, learn, live, llm, music, sounds, stt, textproc, updater
 from .overlay import FlowBar
 
 IS_WIN = sys.platform == "win32"
@@ -22,6 +22,7 @@ class App:
     def __init__(self, updated_to=None):
         self.cfg = config.load()
         self.updating = False
+        self.last_insert = None   # what the last dictation typed, for "undo last dictation"
         self.events = queue.Queue()
         self.jobs = queue.Queue()
         self.recorder = audio.Recorder()
@@ -40,6 +41,8 @@ class App:
         self.root.withdraw()
         self.root.title("Aqua Lite")
         self.bar = FlowBar(self.root, lambda: self.recorder.level, self._bar_clicked, self.cfg.get("show_idle_bar", False))
+        self.live = live.LiveCaption(self.recorder, self.cfg, lambda text: self.post("caption", text))
+        self.learner = learn.Learner(lambda words: self.post("learned", words))
 
         self.tray = None
         try:
@@ -60,6 +63,9 @@ class App:
         if IS_WIN:
             winapi.watch_open_requests(lambda: self.post("open_settings"))
         threading.Thread(target=self._worker, daemon=True, name="worker").start()
+        deps.ensure_in_background(lambda ok, _any: self.post(
+            "toast", "New features are set up" if ok else "Couldn't install a package - some features are off",
+            "ok" if ok else "warn", 4))
         self._preload()
         self.root.after(15, self._pump)
         if self.cfg.get("first_run", True):
@@ -67,8 +73,16 @@ class App:
             self.cfg.save()
             self.root.after(600, self.open_settings)
         ptt = self.cfg["hotkey_ptt"].upper().replace("+", " + ")
-        ready = f"Updated to {updated_to} - hold {ptt} and talk" if updated_to else f"Aqua Lite is ready - hold {ptt} and talk"
-        self.root.after(900, lambda: self.bar.toast(ready, "ok", 4))
+        ready, secs = f"Aqua Lite is ready - hold {ptt} and talk", 4
+        if updated_to:
+            ready = f"Updated to {updated_to} - hold {ptt} and talk"
+        if self.cfg.get("last_seen_version") != config.VERSION:
+            news = config.whats_new(config.VERSION)
+            if news and self.cfg.get("last_seen_version"):
+                ready, secs = f"New in {config.VERSION}: {news}", 7
+            self.cfg["last_seen_version"] = config.VERSION
+            self.cfg.save()
+        self.root.after(900, lambda: self.bar.toast(ready, "ok", secs))
         if self.cfg.get("auto_update", True):
             self.root.after(5000, lambda: self.check_for_updates(manual=False))
 
@@ -96,11 +110,18 @@ class App:
                 time.time() - self.rec_started > 60 * float(self.cfg.get("max_handsfree_minutes", 10)):
             self.machine.reset()
             self.ev_hk_stop(self.rec_command)
+        quiet = float(self.cfg.get("handsfree_silence_secs", 8) or 0)
+        if quiet > 0 and self.machine.recording and self.machine.locked and self.recorder.silent_for > quiet:
+            log.info("hands-free: %.0fs of silence, finishing", quiet)
+            self.machine.reset()
+            self.ev_hk_stop(self.rec_command)
         self.root.after(15, self._pump)
 
     def _preload(self):
         if stt.resolve_engine(self.cfg) == "local":
             threading.Thread(target=self._safe_load, daemon=True).start()
+        if self.cfg.get("live_preview", True) and live.PREVIEW.model is None:
+            live.PREVIEW.preload(self.cfg)
 
     def _safe_load(self):
         try:
@@ -121,6 +142,8 @@ class App:
             return
         self.rec_started, self.rec_command = time.time(), command
         self.bar.set_state("command" if command else "recording")
+        self.live.start()
+        self.learner.stop()
         self._sound("start")
         self._music(True)
         self._tray("recording")
@@ -133,7 +156,12 @@ class App:
         self.bar.set_state("command" if (command or self.rec_command) else "locked")
         self._sound("lock")
 
+    def ev_caption(self, text):
+        if self.recorder.active:
+            self.bar.set_caption(text)
+
     def ev_hk_cancel(self, _command):
+        self.live.stop()
         self._music(False)
         if self.recorder.active:
             self.recorder.stop()
@@ -144,6 +172,7 @@ class App:
     def ev_hk_stop(self, command):
         if not self.recorder.active:
             return
+        self.live.stop()
         self._music(False)
         pcm, speech = self.recorder.stop()
         mode = "command" if (command or self.rec_command) else "dictation"
@@ -159,6 +188,9 @@ class App:
 
     def ev_hk_paste_last(self, _command):
         self.jobs.put(("paste_last",))
+
+    def ev_hk_undo_last(self, _command):
+        self.jobs.put(("undo_last",))
 
     # ------------------------------------------------------------------ ui events
     def ev_toast(self, text, kind="info", seconds=2.8):
@@ -312,6 +344,8 @@ class App:
                         winapi.paste(text, self.cfg)
                     elif not text:
                         self.post("toast", "Nothing dictated yet", "warn")
+                elif job[0] == "undo_last":
+                    self._undo_last()
             except stt.STTError as e:
                 log.error("stt: %s", e)
                 self.post("toast", f"Transcription failed: {str(e)[:70]}", "error", 5)
@@ -323,6 +357,24 @@ class App:
             finally:
                 if self.bar.state == "processing":
                     self.post("bar", "idle")
+
+    def _undo_last(self):
+        li = self.last_insert
+        if not li or time.time() - li["time"] > 300:
+            self.post("toast", "Nothing to undo", "warn")
+            return
+        if li["sent"]:
+            self.post("toast", "That message was already sent - can't undo it", "warn")
+            return
+        proc, _title, pid = winapi.foreground() if IS_WIN else ("demo", "", 0)
+        if pid != li["pid"]:
+            self.post("toast", f"Go back to {li['proc']} to undo the last dictation", "warn")
+            return
+        self.learner.stop()
+        how = winapi.undo_insert(li["text"], li["proc"]) if IS_WIN else "demo"
+        self.last_insert = None
+        log.info("undo last dictation (%s)", how)
+        self.post("toast", "Removed the last dictation", "ok")
 
     def _context(self):
         if IS_WIN:
@@ -348,6 +400,14 @@ class App:
             history.add(app="", title="", mode=mode, raw="", final="", seconds=seconds, words=0,
                         engine=engine, latency=time.perf_counter() - t0, status="empty")
             return
+        enter = False
+        if mode == "dictation" and cfg.get("voice_enter", True):
+            raw, enter = textproc.split_enter_command(raw)
+            if enter and not raw.strip():  # just "press enter"
+                if IS_WIN:
+                    winapi.press_enter()
+                self.post("bar", "idle")
+                return
         ctx, target = self._context()
         status = "ok"
         saved = None
@@ -359,13 +419,21 @@ class App:
             final = llm.run_command(cfg, raw, selection, ctx)
         else:
             final = self._format(raw, ctx)
-            if cfg.get("add_trailing_space", True) and final and not final[-1].isspace():
+            if cfg.get("add_trailing_space", True) and final and not final[-1].isspace() and not enter:
                 final += " "
         latency = time.perf_counter() - t0
         result = {"status": "demo"}
         if final.strip() and IS_WIN:
             result = winapi.paste(final, cfg, target=target, saved=saved)
             status = result["status"]
+            if status == "ok":
+                if enter:
+                    time.sleep(textproc.enter_delay(target[0]))
+                    winapi.press_enter()
+                self.last_insert = {"text": final, "proc": target[0], "pid": target[2], "time": time.time(),
+                                    "sent": enter, "mode": mode}
+                if mode == "dictation" and cfg.get("learn_corrections", True) and not enter:
+                    self._learn(final, target)
         history.add(app=ctx["app"], title=ctx["title"][:200], mode=mode, raw=raw, final=final.strip(),
                     seconds=seconds, words=textproc.word_count(final), engine=engine, latency=latency, status=status)
         log.info("%s %.1fs audio, %.2fs, %s [%s] -> %s: %r", mode, seconds, latency, engine, ctx["category"],
@@ -374,6 +442,23 @@ class App:
             self.post("toast", "Can't type into this window - text copied, press Ctrl+V", "warn", 5)
         else:
             self.post("bar", "idle")
+
+    def _learn(self, final, target):
+        self.learner.watch(final, list(self.cfg.get("dictionary", [])))
+
+    def ev_learned(self, words):
+        dic = list(self.cfg.get("dictionary", []))
+        added = [w for w in words if w.lower() not in {d.lower() for d in dic}]
+        if not added:
+            return
+        self.cfg["dictionary"] = dic + added
+        self.cfg.save()
+        s = self.settings
+        if s and s.win.winfo_exists():  # keep an open Settings window in sync so Save doesn't drop them
+            for w in added:
+                s.dict_list.insert("end", w)
+        log.info("learned from a correction: %s", added)
+        self.bar.toast(f'Learned "{", ".join(added)[:34]}" - added to your dictionary', "ok", 4)
 
     def _format(self, raw, ctx):
         cfg = self.cfg

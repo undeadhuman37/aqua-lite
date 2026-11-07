@@ -92,7 +92,8 @@ class INPUT(ctypes.Structure):
 
 _proto(user32.SendInput, W.UINT, W.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
 
-VK = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "v": 0x56, "c": 0x43, "insert": 0x2D}
+VK = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "v": 0x56, "c": 0x43, "z": 0x5A, "insert": 0x2D,
+      "enter": 0x0D, "backspace": 0x08}
 EXTENDED = {0x2D, 0x2E, 0x24, 0x23, 0x21, 0x22, 0x25, 0x26, 0x27, 0x28, 0xA3, 0xA5, 0x5B, 0x5C}
 MASK_VK = 0xE8  # unassigned VK: an "intervening key" so Win/Alt release doesn't open Start / the menu bar
 
@@ -120,6 +121,37 @@ def send_combo(names):
         time.sleep(0.02)
         _send(list(reversed(vks)), True)
     return ok
+
+
+def tap_key(name, times=1):
+    """Press and release one key `times` times (in batches, so 300 backspaces don't take forever)."""
+    vk = VK[name]
+    left = times
+    while left > 0:
+        n = min(left, 40)
+        downs, ups = _inputs([vk] * n, False), _inputs([vk] * n, True)
+        arr = (INPUT * (2 * n))()
+        for i in range(n):
+            arr[2 * i], arr[2 * i + 1] = downs[i], ups[i]
+        user32.SendInput(2 * n, arr, ctypes.sizeof(INPUT))
+        left -= n
+        time.sleep(0.01)
+
+
+def press_enter():
+    wait_modifiers_released()
+    tap_key("enter")
+
+
+def undo_insert(text, proc):
+    """Remove text we just inserted: Ctrl+Z (one undo step for a paste in most apps), or backspaces in
+    terminals, where Ctrl+Z means something else."""
+    wait_modifiers_released()
+    if proc.lower() in textproc.TERMINALS:
+        tap_key("backspace", len(text.replace("\r\n", "\n")))
+        return "backspace"
+    send_combo(("ctrl", "z"))
+    return "ctrl+z"
 
 
 def send_mask():

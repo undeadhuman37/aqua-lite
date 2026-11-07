@@ -19,6 +19,18 @@ def _read_version():
 VERSION = _read_version()   # the VERSION file at the repo root; bump it to ship an update
 
 
+def whats_new(version):
+    """The one-line summary under '## <version>' in CHANGELOG.md (shown once after an update)."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "CHANGELOG.md"),
+                  encoding="utf-8") as f:
+            lines = [line.strip() for line in f]
+        i = lines.index(f"## {version}")
+        return next((line for line in lines[i + 1:] if line and not line.startswith("#")), "")[:52]
+    except (OSError, ValueError):
+        return ""
+
+
 def data_dir():
     base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
     d = os.path.join(base, "AquaLite")
@@ -41,6 +53,8 @@ DEFAULTS = {
     "hotkey_command_key": "alt",         # add this while holding the PTT keys -> Command Mode
     "hotkey_paste_last": "alt+shift+z",  # paste the last transcript again
     "hotkey_cancel": "esc",              # cancel while recording
+    "hotkey_undo_last": "alt+shift+x",   # remove the text of the last dictation
+    "double_tap_handsfree": True,        # tap the push-to-talk keys twice -> hands-free
 
     # --- Speech to text ---
     "stt_engine": "auto",                # auto | groq | openai | local
@@ -90,6 +104,12 @@ DEFAULTS = {
     "restore_clipboard": True,
     "shift_insert_in_editors": False,    # Wispr's "shift-insert" flag: Shift+Insert in Code/Cursor/Windsurf
     "max_handsfree_minutes": 10,
+    "handsfree_silence_secs": 8,         # hands-free finishes after this much silence (0 = never)
+    "voice_enter": True,                 # end with "press enter" / "send it" to press Enter after typing
+    "live_preview": True,                # show your words in the bar while you talk
+    "live_preview_model": "base",        # small fast offline model used only for the preview
+    "learn_corrections": True,           # add words you fix right after dictating to the dictionary
+    "last_seen_version": "",
     "auto_update": True,                 # check GitHub for a newer version every time Aqua Lite starts
     "first_run": True,
     "settings_version": 2,

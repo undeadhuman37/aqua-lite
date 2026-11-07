@@ -6,6 +6,7 @@ import numpy as np
 
 RATE = 16000
 SPEECH_RMS = 0.012
+QUIET_RMS = 0.007   # below this counts as silence for hands-free auto-stop (lower than SPEECH_RMS: whispering counts)
 
 
 def list_input_devices():
@@ -55,6 +56,7 @@ class Recorder:
         self.level = 0.0          # 0..1 for the Flow bar waveform
         self.speech_frames = 0
         self.started = 0.0
+        self.last_sound = 0.0     # time.time() of the last non-silent block
         self.lock = threading.Lock()
 
     def _cb(self, data, frames, _t, _status):
@@ -63,6 +65,8 @@ class Recorder:
         rms = float(np.sqrt(np.mean(mono ** 2))) if len(mono) else 0.0
         if rms > SPEECH_RMS:
             self.speech_frames += frames
+        if rms > QUIET_RMS:
+            self.last_sound = time.time()
         self.level = min(1.0, rms * 12)
 
     def start(self, device_name=""):
@@ -81,7 +85,7 @@ class Recorder:
                 self.stream = sd.InputStream(samplerate=self.rate, channels=1, dtype="float32",
                                              device=dev, callback=self._cb)
             self.stream.start()
-            self.started = time.time()
+            self.started = self.last_sound = time.time()
 
     def stop_stream(self):
         if self.stream is not None:
@@ -99,6 +103,24 @@ class Recorder:
             self.chunks = []
             self.level = 0.0
             return resample(audio, self.rate), self.speech_frames / max(self.rate, 1)
+
+    def snapshot(self, max_secs):
+        """The last `max_secs` of audio so far, at 16 kHz, without stopping (for the live preview)."""
+        chunks = list(self.chunks)
+        if not chunks:
+            return np.zeros(0, np.float32)
+        need, got, take = int(max_secs * self.rate), 0, []
+        for c in reversed(chunks):
+            take.append(c)
+            got += len(c)
+            if got >= need:
+                break
+        audio = np.concatenate(take[::-1])[-need:]
+        return resample(audio, self.rate)
+
+    @property
+    def silent_for(self):
+        return time.time() - self.last_sound if self.active else 0.0
 
     @property
     def active(self):

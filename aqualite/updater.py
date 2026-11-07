@@ -144,6 +144,8 @@ def install(staged, app_dir=APP_DIR, py=None):
         log.info("update: requirements changed, installing packages")
         _run("installing packages", [py, "-m", "pip", "install", "-r", os.path.join(staged, "requirements.txt"),
               "--quiet", "--disable-pip-version-check"], staged, 900)
+        from . import deps
+        deps.mark_installed(os.path.join(staged, "requirements.txt"))
     _run("the new version's self-test", [py, "-I", os.path.join(staged, "AquaLite.pyw"), "--selftest"], staged, 180)
 
     backup = os.path.join(os.path.dirname(app_dir), "app.backup")

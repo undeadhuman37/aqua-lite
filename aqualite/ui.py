@@ -166,7 +166,10 @@ class SettingsWindow:
             (f"Hold {ptt}", "Push-to-talk: speak while holding, release to insert text"),
             (f"{ptt} + {c['hotkey_handsfree_key'].upper()}", "Hands-free: keeps listening; press the shortcut again to finish"),
             (f"{ptt} + {c['hotkey_command_key'].upper()}", "Command Mode: select text, then say what to do with it"),
+            (f"Tap {ptt} twice", "Hands-free, without reaching for the extra key"),
             (c["hotkey_paste_last"].upper().replace("+", " + "), "Paste your last transcript again"),
+            (c.get("hotkey_undo_last", "alt+shift+x").upper().replace("+", " + "), "Undo: remove the text of your last dictation"),
+            ('Say "press enter"', 'At the end of a dictation: types it, then presses Enter (also "send it")'),
             (c["hotkey_cancel"].upper(), "Cancel the current recording"),
         ]
         box = ttk.LabelFrame(f, text="Shortcuts", padding=10)
@@ -191,10 +194,15 @@ class SettingsWindow:
                                  ("hotkey_handsfree_key", "+ key for hands-free", "pressed while holding push-to-talk"),
                                  ("hotkey_command_key", "+ key for Command Mode", "pressed while holding push-to-talk"),
                                  ("hotkey_paste_last", "Paste last transcript", ""),
+                                 ("hotkey_undo_last", "Undo last dictation", "removes what Aqua Lite just typed"),
                                  ("hotkey_cancel", "Cancel recording", "")):
             self._row(f, r, label, ttk.Entry(f, textvariable=self._var(key), width=24), hint)
             r += 1
         ttk.Separator(f).grid(row=r, column=0, columnspan=3, sticky="ew", pady=10)
+        r += 1
+        self._row(f, r, "Hands-free stops after", ttk.Spinbox(f, from_=0, to=60, width=6,
+                                                              textvariable=self._var("handsfree_silence_secs")),
+                  "seconds of silence (0 = never)")
         r += 1
         devices = ["(Windows default)"] + _safe_devices()
         mic = tk.StringVar(value=self.cfg.get("mic_device") or "(Windows default)")
@@ -204,7 +212,11 @@ class SettingsWindow:
         self.lang = _pair_combo(f, LANGS, self.cfg.get("language", "auto"), width=22)
         self._row(f, r, "Language", self.lang, "Auto handles Arabic, English and mixing")
         r += 1
-        for key, label in (("sounds", "Play start/stop sounds"), ("show_idle_bar", "Keep the Flow bar on screen when idle (click it to start hands-free)"),
+        for key, label in (("live_preview", "Show my words in the bar while I talk"),
+                           ("learn_corrections", "Learn words I correct right after dictating"),
+                           ("voice_enter", 'Say "press enter" or "send it" at the end to press Enter'),
+                           ("double_tap_handsfree", "Tap the shortcut twice for hands-free"),
+                           ("sounds", "Play start/stop sounds"), ("show_idle_bar", "Keep the Flow bar on screen when idle (click it to start hands-free)"),
                            ("whisper_boost", "Whisper mode (boost quiet speech)"),
                            ("add_trailing_space", "Add a space after each dictation"),
                            ("restore_clipboard", "Restore my clipboard after pasting"),
@@ -525,10 +537,12 @@ class SettingsWindow:
     def save(self):
         cfg = self._collect()
         try:
-            for k in ("hotkey_ptt", "hotkey_handsfree_key", "hotkey_command_key", "hotkey_paste_last", "hotkey_cancel"):
+            for k in ("hotkey_ptt", "hotkey_handsfree_key", "hotkey_command_key", "hotkey_paste_last", "hotkey_cancel",
+                      "hotkey_undo_last"):
                 hotkeys.parse(cfg[k])
+            float(cfg.get("handsfree_silence_secs") or 0)
         except ValueError as e:
-            messagebox.showerror(APP_NAME, f"Shortcut problem: {e}", parent=self.win)
+            messagebox.showerror(APP_NAME, f"Setting problem: {e}", parent=self.win)
             return
         self.app.apply_settings(cfg)
         self.status.configure(text="Saved")

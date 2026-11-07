@@ -1,0 +1,28 @@
+# Builds AquaLite-Setup-<version>.exe and attaches it to a GitHub release whenever VERSION changes on main.
+name: Installer
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -q && sudo apt-get install -y -q nsis
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pillow
+      - run: python installer/build.py
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(cat VERSION)
+          awk -v v="## $v" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
+          gh release create "v$v" "dist/AquaLite-Setup-$v.exe" --title "Aqua Lite $v" --notes-file notes.md \
+            || gh release upload "v$v" "dist/AquaLite-Setup-$v.exe" --clobber

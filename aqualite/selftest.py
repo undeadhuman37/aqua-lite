@@ -85,7 +85,29 @@ def check_hotkeys():
     # paste last
     r = Rec(); m = hotkeys.HotkeyMachine(cfg, r)
     m.on_key(ALT, True); m.on_key(SH, True)
-    assert m.on_key(Z, True) is True and r.ev == ["paste_last"], r.ev
+    assert m.on_key(Z, True) is True and r.ev == ["paste_last", "mask"], r.ev
+    # undo last
+    r = Rec(); m = hotkeys.HotkeyMachine(cfg, r)
+    m.on_key(ALT, True); m.on_key(SH, True)
+    assert m.on_key(0x58, True) is True and r.ev == ["undo_last", "mask"], r.ev
+    # double-tap Ctrl+Win -> hands-free; a slow second press is a normal push-to-talk
+    t = [0.0]
+    r = Rec(); m = hotkeys.HotkeyMachine(cfg, r, clock=lambda: t[0])
+    m.on_key(LC, True); m.on_key(LW, True); t[0] += 0.12; m.on_key(LW, False); m.on_key(LC, False)
+    t[0] += 0.15
+    m.on_key(LC, True); m.on_key(LW, True); t[0] += 0.1; m.on_key(LW, False); m.on_key(LC, False)
+    assert r.ev == ["start", "mask", "stop", "start", "lock", "mask"] and m.locked, r.ev
+    t[0] += 3; m.on_key(LC, True); m.on_key(LW, True)
+    assert r.ev[-1] == "stop" and not m.recording, r.ev
+    r = Rec(); m = hotkeys.HotkeyMachine(cfg, r, clock=lambda: t[0])
+    m.on_key(LC, True); m.on_key(LW, True); t[0] += 0.12; m.on_key(LW, False); m.on_key(LC, False)
+    t[0] += 0.8
+    m.on_key(LC, True); m.on_key(LW, True); t[0] += 2; m.on_key(LW, False)
+    assert "lock" not in r.ev and r.ev[-1] == "stop", r.ev
+    r = Rec(); m = hotkeys.HotkeyMachine({**cfg, "double_tap_handsfree": False}, r, clock=lambda: t[0])
+    m.on_key(LC, True); m.on_key(LW, True); t[0] += 0.1; m.on_key(LW, False); m.on_key(LC, False)
+    t[0] += 0.1; m.on_key(LC, True); m.on_key(LW, True)
+    assert "lock" not in r.ev, r.ev
     # Ctrl+C etc. untouched
     r = Rec(); m = hotkeys.HotkeyMachine(cfg, r)
     m.on_key(LC, True); assert m.on_key(0x43, True) is False; m.on_key(0x43, False); m.on_key(LC, False)
@@ -172,6 +194,27 @@ def check_windows():
     print(f"  running as admin: {winapi.self_elevated()}")
 
 
+def check_new_features():
+    se = textproc.split_enter_command
+    assert se("See you at 6. Press enter.") == ("See you at 6.", True)
+    assert se("Ok see you then. Send it.") == ("Ok see you then.", True) and se("press enter") == ("", True)
+    assert se("Please review and send it.") == ("Please review and send it.", False)
+    assert se("مرحبا. اضغط انتر") == ("مرحبا.", True)
+    lw = textproc.learned_words
+    assert lw("Tell Patrisio hi.", "Tell Patricio hi.") == ["Patricio"] and lw("the api is down", "the API is down") == ["API"]
+    assert lw("have a meeting", "have a call") == [] and lw("hello there", "Hello there") == []
+    from . import learn, live
+    t = [0.0]
+    d, states = "Tell Patrisio hi. ", [(0, "Hey! Tell Patrisio hi. "), (3, "Hey! Tell Patricio hi. "), (8, "")]
+    read = lambda: [x for at, x in states if t[0] >= at][-1]
+    w = learn.CorrectionWatcher(d, read, lambda: 1, lambda _w: None, clock=lambda: t[0],
+                                sleep=lambda secs: t.__setitem__(0, t[0] + secs))
+    assert w.run() == ["Patricio"]
+    assert live.tidy("Thanks for watching!", False) == "" and live.tidy("lo there friend", True) == "there friend"
+    from .config import VERSION, whats_new
+    assert whats_new(VERSION), "CHANGELOG.md has no entry for this version"
+
+
 def check_updater():
     from . import updater
     pv, new = updater.parse_version, updater.is_newer
@@ -183,7 +226,7 @@ def check_updater():
 def main():
     for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
-                     ("music shuffle", check_music), ("updater", check_updater)):
+                     ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features)):
         fn()
         print(f"ok  {name}")
     if sys.platform == "win32":

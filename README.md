@@ -13,7 +13,11 @@ It is not affiliated with or endorsed by Wispr AI, Inc.
 
 ## Features
 
-- **Push-to-talk and hands-free:** hold `Ctrl + Win`, or add `Space` to keep listening. The Flow bar stays out of the way and only appears while you're dictating.
+- **Push-to-talk and hands-free:** hold `Ctrl + Win`, or tap it twice (or add `Space`) to keep listening. Hands-free finishes by itself after 8 seconds of silence. The Flow bar stays out of the way and only appears while you're dictating.
+- **Live words:** see what you're saying in a small bubble above the bar as you talk.
+- **Learns your corrections:** fix a word right after dictating ("Patrisio" to "Patricio") and it goes into your dictionary.
+- **"Press enter":** end a dictation with "press enter" or "send it" and the message is sent after it's typed.
+- **Undo:** `Alt + Shift + X` removes the text of your last dictation.
 - **Command Mode:** select text, hold `Ctrl + Win + Alt`, and say "make this formal", "translate to Arabic" or "turn this into bullets".
 - **AI formatting:** removes fillers, applies self-corrections ("at 5, no wait, 6"), adds punctuation and lists, and writes numbers and emails properly. It never answers your dictation.
 - **Styles per app:** casual in WhatsApp, formal in email, exact identifiers in code editors. Four editing strengths, from verbatim to polished.
@@ -25,6 +29,12 @@ It is not affiliated with or endorsed by Wispr AI, Inc.
 - **History and stats**, a tray menu, start-with-Windows, and every shortcut can be changed.
 
 ## Install (Windows 10/11)
+
+**Easiest:** download **`AquaLite-Setup.exe`** from the [latest release](https://github.com/undeadhuman37/aqua-lite/releases/latest)
+and run it. You don't need Python. Windows may show a SmartScreen warning because the installer isn't code-signed: click
+**More info**, then **Run anyway**.
+
+**Or by hand:**
 
 1. Download this repository (green **Code** button, then **Download ZIP**) and unzip it.
 2. Double-click **`install.bat`**. It finds or installs Python 3.12, sets up a private environment in
@@ -42,9 +52,12 @@ or turn automatic updates off in Settings. Running `install.bat` again also upda
 | Shortcut | Action |
 |---|---|
 | Hold `Ctrl + Win` | Push-to-talk |
-| `Ctrl + Win + Space` | Hands-free (press `Ctrl + Win` again to finish) |
+| Tap `Ctrl + Win` twice | Hands-free (press `Ctrl + Win` again to finish, or just stop talking) |
+| `Ctrl + Win + Space` | Hands-free, the other way |
 | Hold `Ctrl + Win + Alt` | Command Mode on the selected text |
 | `Alt + Shift + Z` | Paste the last transcript again |
+| `Alt + Shift + X` | Undo the last dictation |
+| Say "press enter" / "send it" | At the end of a dictation: press Enter after typing |
 | `Esc` | Cancel recording |
 
 For hands-free, hold `Ctrl + Win`, tap `Space`, then let go and keep talking. Press `Ctrl + Win` again (or click the bar) to insert the text.
@@ -53,6 +66,10 @@ You can also start hands-free from the tray icon menu, or turn on **Keep the Flo
 Open Settings from the tray icon, or launch **Aqua Lite** from the Start menu while it's running.
 
 ## Privacy
+
+**Live words** run on a small offline model on your PC, never a cloud service. **Learning from corrections** reads
+the text box you just dictated into (through Windows UI Automation, the accessibility API) for up to 45 seconds,
+only to spot words you fixed. It never reads password boxes, and nothing leaves your PC. Both can be turned off in Settings.
 
 In offline mode nothing leaves your PC. With a cloud provider, only the recording and the formatting request
 (your dictionary plus the current app name and window title) go to that provider, using your own API key.
@@ -75,7 +92,10 @@ Run `python AquaLite.pyw --selftest` to check the logic and the Windows integrat
 On launch, the app reads [`VERSION`](VERSION) on the `main` branch. If it's higher than the installed one, it downloads
 the repository zip, installs any new packages, runs the new version's self-test, backs up the current copy to
 `%LOCALAPPDATA%\AquaLite\app.backup`, copies the new files over and restarts. If the self-test fails, nothing is changed.
-It never updates a git checkout. **To ship an update, push the changes and bump `VERSION`** (e.g. `1.1.0` to `1.2.0`).
+It never updates a git checkout. **To ship an update, push the changes, bump `VERSION`** (e.g. `1.1.0` to `1.2.0`)
+**and add a `## <version>` entry to [`CHANGELOG.md`](CHANGELOG.md)**. Its first line is shown once after the update
+(the self-test fails without it). Bumping `VERSION` also builds `AquaLite-Setup-<version>.exe` and attaches it to a release
+(see `.github/workflows/installer.yml`). To build the installer yourself: install NSIS, then run `python installer/build.py`.
 
 ## Credits
 
@@ -93,7 +113,11 @@ It never updates a git checkout. **To ship an update, push the changes and bump 
   [NumPy](https://numpy.org) (BSD),
   [Pillow](https://python-pillow.org) (MIT-CMU),
   [pystray](https://github.com/moses-palmer/pystray) (LGPL-3.0),
-  [Requests](https://github.com/psf/requests) (Apache-2.0).
+  [Requests](https://github.com/psf/requests) (Apache-2.0),
+  [comtypes](https://github.com/enthought/comtypes) (MIT),
+  [arabic-reshaper](https://github.com/mpcabd/python-arabic-reshaper) (MIT),
+  [python-bidi](https://github.com/MeirKriheli/python-bidi) (LGPL-3.0).
+  The Windows installer is built with [NSIS](https://nsis.sourceforge.io) (zlib license).
   These are installed from PyPI by `install.bat`, not bundled in this repository.
 
 ## License

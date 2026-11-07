@@ -42,12 +42,13 @@ class FlowBar:
         self.root, self.level_fn, self.on_click = root, level_fn, on_click
         self.show_idle = show_idle
         self.state, self.label, self.kind, self.tick = "idle", "", "info", 0
+        self.caption = ""   # live words while recording
         self.levels = collections.deque([0.0] * 14, maxlen=14)
         self.toast_job = None
         self.dirty = True
         # slide animation: shown goes 0 (tucked under the screen edge) -> 1 (fully up)
         self.shown, self.last_frame, self.going_up = 0.0, time.perf_counter(), False
-        self.face = ("idle", "", "info")   # what to draw while sliding away
+        self.face = ("idle", "", "info", "")   # what to draw while sliding away
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
@@ -77,7 +78,14 @@ class FlowBar:
         self._loop()
 
     # ---------------------------------------------------------------- public
+    def set_caption(self, text):
+        if text != self.caption:
+            self.caption = text
+            self.dirty = True
+
     def set_state(self, state, label=""):
+        if state not in ("recording", "locked", "command"):
+            self.caption = ""
         self.state, self.label = state, label
         self.dirty = True
         if self.toast_job:
@@ -138,13 +146,13 @@ class FlowBar:
 
     def _draw(self):
         if self._visible():
-            self.face = (self.state, self.label, self.kind)
+            self.face = (self.state, self.label, self.kind, self.caption)
         offset = self._slide_offset()
         if not self._visible() and self.shown == 0.0:
             img = self.r.render("hidden")
         else:
-            state, label, kind = self.face
-            img = self.r.render(state, label, list(self.levels), self.tick, kind)
+            state, label, kind, caption = self.face
+            img = self.r.render(state, label, list(self.levels), self.tick, kind, caption)
             if offset:  # slide: shift the picture down; whatever falls off the bottom is cut, so it tucks under the edge
                 moved = Image.new("RGBA", img.size, (0, 0, 0, 0))
                 moved.paste(img, (0, offset))

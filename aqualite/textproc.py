@@ -141,3 +141,77 @@ def looks_like_an_answer(raw, cleaned):
 
 def word_count(text):
     return len(re.findall(r"\w+", text))
+
+
+# ---------------------------------------------------------------- voice "press enter"
+# Said at the very end of a dictation: the text is typed, then Enter is pressed (send in WhatsApp, ChatGPT, Slack...).
+_ENTER_ANYWHERE = re.compile(r"[\s,;:-]*\b(?:press|hit|and press|and hit)\s+(?:the\s+)?enter(?:\s+key)?[\s.!?]*$",
+                             re.IGNORECASE)
+# "send it" / "send message" only count as their own sentence ("... see you then. Send it."), so
+# "please review and send it" stays plain text.
+_ENTER_OWN_SENTENCE = re.compile(r"(?:^|(?<=[.!?]))\s*\b(?:send it|send message|send that)[\s.!?]*$", re.IGNORECASE)
+_ENTER_ARABIC = re.compile(r"[\s،,-]*(?:اضغط|إضغط)\s+(?:انتر|إنتر|enter)[\s.!?؟]*$", re.IGNORECASE)
+SLOW_PASTE = ("whatsapp", "slack", "teams", "ms-teams", "discord", "messenger", "signal", "chrome", "msedge",
+              "firefox", "brave", "opera", "arc", "vivaldi", "zen")
+
+
+def enter_delay(proc):
+    """Wait between pasting and pressing Enter. Browser/Electron chat apps insert pasted text a beat later;
+    pressing Enter too soon would send an empty message."""
+    return 0.5 if proc.lower().startswith(SLOW_PASTE) else 0.3
+
+
+TERMINALS = ("windowsterminal", "powershell", "pwsh", "cmd", "conhost", "wezterm-gui", "alacritty", "mintty")
+
+
+def split_enter_command(text):
+    """'see you at 6. Press enter.' -> ('see you at 6.', True). Text without the command comes back unchanged."""
+    for rx in (_ENTER_ANYWHERE, _ENTER_ARABIC, _ENTER_OWN_SENTENCE):
+        m = rx.search(text or "")
+        if m:
+            return text[:m.start()].rstrip(" ,;:-"), True
+    return text, False
+
+
+# ---------------------------------------------------------------- learning from corrections
+_WORD = re.compile(r"[\w'’-]+", re.UNICODE)
+
+
+def _ratio(a, b):
+    import difflib
+    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+
+def learned_words(dictated, edited):
+    """Compare what Aqua Lite typed with what the user turned it into. Returns words worth adding to the
+    dictionary: one-for-one swaps that look like a mis-heard name or term ('Patrisio' -> 'Patricio'),
+    not rewrites ('meeting' -> 'call')."""
+    import difflib
+    a, b = _WORD.findall(dictated or ""), _WORD.findall(edited or "")
+    if not a or not b:
+        return []
+    out = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, [w.lower() for w in a], [w.lower() for w in b],
+                                                     autojunk=False).get_opcodes():
+        if op != "replace":
+            continue
+        old, new = " ".join(a[i1:i2]), " ".join(b[j1:j2])
+        if (i2 - i1) > 2 or (j2 - j1) > 2 or len(new) < 3 or len(new) > 40 or any(c.isdigit() for c in new):
+            continue
+        if old.lower().replace(" ", "") == new.lower().replace(" ", ""):
+            continue  # just spacing/joining
+        if _ratio(old, new) >= 0.5:
+            out.append(new)
+    # case-only fixes: 'patricio' -> 'Patricio', 'api' -> 'API' (names, brands, acronyms) - but not
+    # capitalising the first word of a sentence, and not lower-casing
+    if len(a) == len(b):
+        starts = {m.start() for m in _WORD.finditer(edited)}
+        sentence_starts = {next((p for p in sorted(starts) if p >= m.end()), -1)
+                           for m in re.finditer(r"(?:^|[.!?\n])\s*", edited)}
+        for m, old in zip(_WORD.finditer(edited), a):
+            new = m.group()
+            if old != new and old.lower() == new.lower() and len(new) >= 2 and new not in out \
+                    and sum(c.isupper() for c in new) > sum(c.isupper() for c in old) \
+                    and (m.start() not in sentence_starts or sum(c.isupper() for c in new) > 1):
+                out.append(new)
+    return out

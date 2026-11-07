@@ -2,6 +2,7 @@
 import math
 import os
 import random
+import re
 import sys
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -136,7 +137,7 @@ class Bubbles:
 class FlowBarRenderer:
     """Draws every Flow bar state into an RGBA image of size (W, H) * scale."""
 
-    W, H = 440, 80
+    W, H = 440, 118   # extra room on top for the live caption
 
     def __init__(self, scale=1.0):
         self.scale = scale
@@ -163,7 +164,34 @@ class FlowBarRenderer:
             self.cache[key] = (box,) + glass_capsule(self.big, box, **kw)
         return self.cache[key]
 
-    def render(self, state, label="", levels=(), tick=0, kind="info"):
+    def _caption(self, img, text, above_y):
+        """A small glass bubble above the bar with the newest words of what you're saying."""
+        maxw = (self.W - 40) * self.scale * SS
+        words = (text or "").split()
+        shown = shape_for_display(" ".join(words), self.small)
+        while words and (not shown or self.small.getlength(shown) > maxw):  # keep the newest words that fit
+            words = words[1:]  # trimmed in spoken order, before any right-to-left reordering
+            shown = shape_for_display("\u2026 " + " ".join(words), self.small)
+        if not words or not shown:
+            return
+        tw = self.small.getlength(shown) / (self.scale * SS)
+        w = min(self.W - 16, int(tw / 32 + 1) * 32 + 24)  # widths in steps, so only a few bubble sizes get cached
+        h = 24
+        key = ("cap", w)
+        if key not in self.cache:
+            W, _H = self.big
+            y1 = above_y - self._u(6)
+            box = (W // 2 - self._u(w) // 2, y1 - self._u(h), W // 2 + self._u(w) // 2, y1)
+            self.cache[key] = (box,) + glass_capsule(self.big, box, (232, 248, 255), (150, 205, 240), shadow=True)
+        box, base, over = self.cache[key]
+        img.alpha_composite(base)
+        d = ImageDraw.Draw(img)
+        cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+        d.text((cx, cy + SS), shown, font=self.small, fill=(255, 255, 255, 160), anchor="mm")
+        d.text((cx, cy), shown, font=self.small, fill=(10, 60, 105, 255), anchor="mm")
+        img.alpha_composite(over)
+
+    def render(self, state, label="", levels=(), tick=0, kind="info", caption=""):
         if state == "hidden":
             return Image.new("RGBA", self.size, (0, 0, 0, 0))
         if state == "idle":
@@ -209,6 +237,8 @@ class FlowBarRenderer:
                 d.rounded_rectangle((x1 - self._u(22) - s, cy - s, x1 - self._u(22) + s, cy + s), radius=SS,
                                     fill=(20, 90, 150, 230))
             img.alpha_composite(over)
+            if caption:
+                self._caption(img, caption, y0)
             return img.resize(self.size, Image.LANCZOS)
         if state == "processing":
             box, base, over = self._glass("proc", 100, 36, glow=(90, 230, 255))
@@ -237,6 +267,28 @@ class FlowBarRenderer:
         d.text((tx, cy), text, font=self.font, fill=(255, 255, 255, 255), anchor="lm")
         img.alpha_composite(over)
         return img.resize(self.size, Image.LANCZOS)
+
+
+_ARABIC = re.compile("[\u0590-\u08ff\ufb1d-\ufefc]")
+
+
+def shape_for_display(text, font):
+    """Arabic/Hebrew need joined letters and right-to-left order. Pillow does it itself when it was built with
+    libraqm; otherwise use arabic-reshaper + python-bidi if installed, else don't show (better than garbled)."""
+    text = " ".join((text or "").split())
+    if not _ARABIC.search(text):
+        return text
+    try:
+        if ImageFont.core.HAVE_RAQM and font.layout_engine == ImageFont.Layout.RAQM:
+            return text
+    except AttributeError:
+        pass
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+        return get_display(arabic_reshaper.reshape(text))
+    except Exception:
+        return ""
 
 
 def premultiplied_bgra(img):
