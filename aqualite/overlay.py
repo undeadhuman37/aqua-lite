@@ -1,12 +1,40 @@
 """The Flow bar: a glossy Frutiger Aero capsule at the bottom of the screen that never takes focus."""
 import collections
 import sys
+import time
 import tkinter as tk
+
+from PIL import Image
 
 from .aero import FlowBarRenderer, premultiplied_bgra
 
 IS_WIN = sys.platform == "win32"
 ANIMATED = ("recording", "locked", "command", "processing")
+SHOW_SECS, HIDE_SECS = 0.30, 0.22   # slide up from / down under the bottom edge of the screen
+
+
+def ease_out_back(t, s=1.4):
+    """0 -> 1 with a small overshoot at the end: the bar pops up and settles."""
+    t -= 1
+    return t * t * ((s + 1) * t + s) + 1
+
+
+def ease_in_cubic(t):
+    return t * t * t
+
+
+def _match(amount, up):
+    """Find the progress on the up (or down) curve that puts the bar at `amount` (0 hidden .. 1 shown)."""
+    f = (lambda t: ease_out_back(t)) if up else (lambda t: 1 - ease_in_cubic(1 - t))
+    lo, hi = 0.0, 1.0
+    if up:  # the up curve overshoots past 1; search only its rising part
+        hi = 0.6  # the curve peaks (~1.07) just after this
+        if amount >= f(hi):
+            return hi
+    for _ in range(24):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if f(mid) < amount else (lo, mid)
+    return (lo + hi) / 2
 
 
 class FlowBar:
@@ -17,6 +45,9 @@ class FlowBar:
         self.levels = collections.deque([0.0] * 14, maxlen=14)
         self.toast_job = None
         self.dirty = True
+        # slide animation: shown goes 0 (tucked under the screen edge) -> 1 (fully up)
+        self.shown, self.last_frame, self.going_up = 0.0, time.perf_counter(), False
+        self.face = ("idle", "", "info")   # what to draw while sliding away
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
@@ -72,16 +103,52 @@ class FlowBar:
         try:
             if self.state in ("recording", "locked", "command"):
                 self.levels.append(self.level_fn())
-            if self.dirty or self.state in ANIMATED or self.tick % 30 == 0:
+            if self.dirty or self.state in ANIMATED or self._sliding() or self.tick % 30 == 0:
                 self._draw()
                 self.dirty = False
         except tk.TclError:
             return
         self.root.after(33, self._loop)
 
+    def _visible(self):
+        return not (self.state == "idle" and not self.show_idle)
+
+    def _sliding(self):
+        return self.shown != (1.0 if self._visible() else 0.0)
+
+    def _slide_offset(self):
+        """Advance the slide; returns how many pixels to push the bar down (0 = fully shown)."""
+        now = time.perf_counter()
+        dt, self.last_frame = min(now - self.last_frame, 0.1), now
+        if self.shown in (0.0, 1.0):  # starting from rest: the last frame may have been long ago
+            dt = min(dt, 0.034)
+        up = self._visible()
+        if up != self.going_up:  # changed direction mid-slide: continue from where the bar is, no jump
+            self.shown = _match(self._amount(self.going_up, self.shown), up)
+            self.going_up = up
+        if up:
+            self.shown = min(1.0, self.shown + dt / SHOW_SECS)
+        else:
+            self.shown = max(0.0, self.shown - dt / HIDE_SECS)
+        return round((1 - self._amount(up, self.shown)) * self.h)
+
+    @staticmethod
+    def _amount(up, shown):
+        return ease_out_back(shown) if up else 1 - ease_in_cubic(1 - shown)
+
     def _draw(self):
-        state = "hidden" if (self.state == "idle" and not self.show_idle) else self.state
-        img = self.r.render(state, self.label, list(self.levels), self.tick, self.kind)
+        if self._visible():
+            self.face = (self.state, self.label, self.kind)
+        offset = self._slide_offset()
+        if not self._visible() and self.shown == 0.0:
+            img = self.r.render("hidden")
+        else:
+            state, label, kind = self.face
+            img = self.r.render(state, label, list(self.levels), self.tick, kind)
+            if offset:  # slide: shift the picture down; whatever falls off the bottom is cut, so it tucks under the edge
+                moved = Image.new("RGBA", img.size, (0, 0, 0, 0))
+                moved.paste(img, (0, offset))
+                img = moved
         x, y = self._position()
         if self.layered:
             from . import winapi
@@ -92,7 +159,7 @@ class FlowBar:
                 winapi.user32.SetWindowPos(self.hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
             return
         # fallback / non-Windows: composite over the key colour (hard edges) and show in the canvas
-        from PIL import Image, ImageTk
+        from PIL import ImageTk
         bg = Image.new("RGBA", img.size, (255, 0, 254, 255) if IS_WIN else (32, 44, 60, 255))
         a = img.getchannel("A").point(lambda v: 255 if v > 110 else 0) if IS_WIN else img.getchannel("A")
         bg.paste(img.convert("RGB"), (0, 0), a)
