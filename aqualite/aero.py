@@ -331,8 +331,9 @@ def sky_banner(w, h, title="Aqua Lite", subtitle="Speak anywhere you can type"):
         d.ellipse((x - r, y - r, x + r, y + r), outline=(255, 255, 255, 150), width=SS, fill=(255, 255, 255, 28))
         d.ellipse((x - r * 0.55, y - r * 0.65, x - r * 0.1, y - r * 0.25), fill=(255, 255, 255, 190))
     img.alpha_composite(bub)
-    # glossy title orb + text
-    orb(img, int(H * 0.5), H // 2, int(H * 0.32), ((200, 255, 140), (30, 160, 40)))
+    # the app icon + title
+    icon = app_icon(int(h * 0.7)).resize((int(H * 0.7), int(H * 0.7)), Image.LANCZOS)
+    img.alpha_composite(icon, (int(H * 0.15), int(H * 0.15)))
     d = ImageDraw.Draw(img)
     f1, f2 = _font(int(h * 0.36 * SS)), _font(int(h * 0.17 * SS))
     tx = int(H * 0.95)
