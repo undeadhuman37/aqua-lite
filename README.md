@@ -13,7 +13,7 @@ It is not affiliated with or endorsed by Wispr AI, Inc.
 
 ## Features
 
-- **Push-to-talk and hands-free:** hold `Ctrl + Win`, or add `Space` to keep listening.
+- **Push-to-talk and hands-free:** hold `Ctrl + Win`, or add `Space` to keep listening. The Flow bar stays out of the way and only appears while you're dictating.
 - **Command Mode:** select text, hold `Ctrl + Win + Alt`, and say "make this formal", "translate to Arabic" or "turn this into bullets".
 - **AI formatting:** removes fillers, applies self-corrections ("at 5, no wait, 6"), adds punctuation and lists, and writes numbers and emails properly. It never answers your dictation.
 - **Styles per app:** casual in WhatsApp, formal in email, exact identifiers in code editors. Four editing strengths, from verbatim to polished.
@@ -44,6 +44,9 @@ To update, run `install.bat` again. To remove everything, run `uninstall.bat`.
 | Hold `Ctrl + Win + Alt` | Command Mode on the selected text |
 | `Alt + Shift + Z` | Paste the last transcript again |
 | `Esc` | Cancel recording |
+
+For hands-free, hold `Ctrl + Win`, tap `Space`, then let go and keep talking. Press `Ctrl + Win` again (or click the bar) to insert the text.
+You can also start hands-free from the tray icon menu, or turn on **Keep the Flow bar on screen when idle** in Settings and click the bar.
 
 Open Settings from the tray icon, or launch **Aqua Lite** from the Start menu while it's running.
 

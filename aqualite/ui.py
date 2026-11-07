@@ -204,7 +204,7 @@ class SettingsWindow:
         self.lang = _pair_combo(f, LANGS, self.cfg.get("language", "auto"), width=22)
         self._row(f, r, "Language", self.lang, "Auto handles Arabic, English and mixing")
         r += 1
-        for key, label in (("sounds", "Play start/stop sounds"), ("show_idle_bar", "Show the Flow bar when idle"),
+        for key, label in (("sounds", "Play start/stop sounds"), ("show_idle_bar", "Keep the Flow bar on screen when idle (click it to start hands-free)"),
                            ("whisper_boost", "Whisper mode (boost quiet speech)"),
                            ("add_trailing_space", "Add a space after each dictation"),
                            ("restore_clipboard", "Restore my clipboard after pasting"),

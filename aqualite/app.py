@@ -38,7 +38,7 @@ class App:
         self.root = tk.Tk()
         self.root.withdraw()
         self.root.title("Aqua Lite")
-        self.bar = FlowBar(self.root, lambda: self.recorder.level, self._bar_clicked, self.cfg.get("show_idle_bar", True))
+        self.bar = FlowBar(self.root, lambda: self.recorder.level, self._bar_clicked, self.cfg.get("show_idle_bar", False))
 
         self.tray = None
         try:
@@ -190,18 +190,27 @@ class App:
             self.tray.stop()
         self.root.after(50, self.root.destroy)
 
-    def _bar_clicked(self, state):
-        if state == "idle" and not self.paused:
-            # click the idle bar = start hands-free dictation
-            self.machine.recording = self.machine.locked = True
-            self.ev_hk_start(False)
-            if self.recorder.active:
-                self.bar.set_state("locked")
-            else:
-                self.machine.reset()
-        elif state in ("locked", "recording", "command"):
+    def ev_start_handsfree(self):
+        """Start hands-free dictation without the keyboard (tray menu, or clicking the idle bar)."""
+        if self.paused or self.machine.recording:
+            return
+        self.machine.recording = self.machine.locked = True
+        self.ev_hk_start(False)
+        if self.recorder.active:
+            self.bar.set_state("locked")
+        else:
+            self.machine.reset()
+
+    def ev_stop_recording(self):
+        if self.machine.recording:
             self.machine.reset()
             self.ev_hk_stop(self.rec_command)
+
+    def _bar_clicked(self, state):
+        if state == "idle":
+            self.ev_start_handsfree()  # click the idle bar = start hands-free dictation
+        elif state in ("locked", "recording", "command"):
+            self.ev_stop_recording()
 
     def open_settings(self, tab=0):
         from .ui import SettingsWindow
@@ -222,7 +231,7 @@ class App:
         self.cfg.update(new)
         self.cfg.save()
         self.machine.configure(self.cfg)
-        self.bar.show_idle = self.cfg.get("show_idle_bar", True)
+        self.bar.show_idle = self.cfg.get("show_idle_bar", False)
         self.bar.set_state(self.bar.state if self.bar.state != "toast" else "idle")
         if IS_WIN and old_startup != self.cfg.get("launch_at_startup"):
             winapi.set_startup(self.cfg["launch_at_startup"], os.path.join(HERE, "AquaLite.pyw"), self.icon_path)

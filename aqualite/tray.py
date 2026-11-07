@@ -19,6 +19,8 @@ class Tray:
         M = pystray.MenuItem
         self.icon = pystray.Icon("Aqua Lite", make_icon_image(), "Aqua Lite - hold Ctrl+Win to talk", menu=pystray.Menu(
             M("Open Aqua Lite", lambda: app.post("open_settings"), default=True),
+            M(lambda _i: "Stop and insert text" if app.machine.recording else "Start hands-free dictation",
+              lambda: app.post("stop_recording" if app.machine.recording else "start_handsfree")),
             M("History", lambda: app.post("open_history")),
             M("Copy last transcript", lambda: app.post("copy_last")),
             M(lambda _i: "Resume" if app.paused else "Pause shortcuts", lambda: app.post("toggle_pause")),

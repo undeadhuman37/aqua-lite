@@ -72,7 +72,7 @@ DEFAULTS = {
     # --- Behaviour ---
     "mic_device": "",                    # "" = Windows default input
     "sounds": True,
-    "show_idle_bar": True,               # keep a small Flow bar visible when idle
+    "show_idle_bar": False,              # False = the Flow bar only appears while you're dictating
     "whisper_boost": True,               # auto-gain for quiet / whispered speech
     "add_trailing_space": True,
     "launch_at_startup": False,
@@ -80,6 +80,7 @@ DEFAULTS = {
     "shift_insert_in_editors": False,    # Wispr's "shift-insert" flag: Shift+Insert in Code/Cursor/Windsurf
     "max_handsfree_minutes": 10,
     "first_run": True,
+    "settings_version": 2,
 }
 
 _lock = threading.Lock()
@@ -113,6 +114,10 @@ def load():
         except Exception:
             os.replace(CONFIG_PATH, CONFIG_PATH + ".broken")
     cfg = Config(_merge(DEFAULTS, data))
+    if data and int(data.get("settings_version", 1)) < 2:
+        # v2: the bar hides when idle and only shows while dictating (it used to stay on screen)
+        cfg["show_idle_bar"] = False
+        cfg["settings_version"] = 2
     mf = cfg.get("music_folder") or ""
     if mf and not os.path.isdir(mf) and "Flowlite" in mf:  # path saved under the app's old name
         cfg["music_folder"] = mf.replace("Flowlite", "AquaLite")
