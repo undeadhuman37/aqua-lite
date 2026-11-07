@@ -212,7 +212,7 @@ def check_new_features():
     assert w.run() == ["Patricio"]
     assert live.tidy("Thanks for watching!", False) == "" and live.tidy("lo there friend", True) == "there friend"
     from .config import VERSION, whats_new
-    assert whats_new(VERSION), "CHANGELOG.md has no entry for this version"
+    assert whats_new(VERSION)[1], "CHANGELOG.md has no entry for this version"
 
 
 def check_updater():

@@ -76,13 +76,19 @@ class App:
         ready, secs = f"Aqua Lite is ready - hold {ptt} and talk", 4
         if updated_to:
             ready = f"Updated to {updated_to} - hold {ptt} and talk"
+        follow_up = None
         if self.cfg.get("last_seen_version") != config.VERSION:
-            news = config.whats_new(config.VERSION)
+            name, news = config.whats_new(config.VERSION)
             if news and self.cfg.get("last_seen_version"):
-                ready, secs = f"New in {config.VERSION}: {news}", 7
+                if name:  # "Aqua Lite 1.3.0: Quality of Life Update", then what's in it
+                    ready, secs, follow_up = f"Aqua Lite {config.VERSION}: {name}", 3.5, f"New: {news}"
+                else:
+                    ready, secs = f"New in {config.VERSION}: {news}", 7
             self.cfg["last_seen_version"] = config.VERSION
             self.cfg.save()
         self.root.after(900, lambda: self.bar.toast(ready, "ok", secs))
+        if follow_up:
+            self.root.after(900 + int(secs * 1000) + 150, lambda: self.bar.toast(follow_up, "ok", 6))
         if self.cfg.get("auto_update", True):
             self.root.after(5000, lambda: self.check_for_updates(manual=False))
 

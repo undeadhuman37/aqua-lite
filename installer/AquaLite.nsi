@@ -35,7 +35,7 @@ VIAddVersionKey "LegalCopyright" "MIT License"
 !define MUI_WELCOMEPAGE_TITLE_3LINES
 
 !define MUI_WELCOMEPAGE_TITLE "Welcome to ${APPNAME}"
-!define MUI_WELCOMEPAGE_TEXT "Free voice dictation for Windows.$\r$\n$\r$\nHold Ctrl + Win, speak, and let go: your words appear wherever you're typing - WhatsApp, Gmail, Word, anything.$\r$\n$\r$\nSetup installs what it needs (including Python, if this PC doesn't have it) and downloads the offline speech models, about 600 MB, one time. It takes a few minutes and needs an internet connection.$\r$\n$\r$\nClick Install to continue."
+!define MUI_WELCOMEPAGE_TEXT "Free voice dictation for Windows.$\r$\n$\r$\nHold Ctrl + Win, speak, and let go: your words appear wherever you're typing - WhatsApp, Gmail, Word, anything.$\r$\n$\r$\nSetup installs what it needs (including Python, if this PC doesn't have it) and downloads the offline speech models, about 600 MB, one time. It takes a few minutes and needs an internet connection.$\r$\n$\r$\nPrivacy: no account, no tracking. Only update checks and model downloads go online, unless you add a cloud API key.$\r$\n$\r$\nClick Install to continue."
 !define MUI_FINISHPAGE_TITLE "${APPNAME} is ready"
 !define MUI_FINISHPAGE_TEXT "${APPNAME} is running - look for its icon in the system tray.$\r$\n$\r$\nHold Ctrl + Win and talk. Tap Ctrl + Win twice for hands-free.$\r$\n$\r$\nIt keeps itself up to date."
 

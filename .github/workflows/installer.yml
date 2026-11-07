@@ -1,4 +1,11 @@
 # Builds AquaLite-Setup-<version>.exe and attaches it to a GitHub release whenever VERSION changes on main.
+#
+# Code signing (SignPath Foundation, free for open source): once the project is approved, set these in
+# Settings > Secrets and variables > Actions:
+#   secret   SIGNPATH_API_TOKEN
+#   variable SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG
+# Until then the signing step is skipped and the installer is released unsigned.
+# Every signing request has to be approved in SignPath by an approver before the release finishes.
 name: Installer
 on:
   push:
@@ -7,9 +14,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  actions: read
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest   # GitHub-hosted, as SignPath requires for open source signing
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -q && sudo apt-get install -y -q nsis
@@ -17,12 +25,41 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pillow
-      - run: python installer/build.py
+      - name: Build installer
+        id: build
+        run: |
+          python installer/build.py
+          echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload unsigned installer
+        id: upload-unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: AquaLite-Setup-${{ steps.build.outputs.version }}-unsigned
+          path: dist/AquaLite-Setup-${{ steps.build.outputs.version }}.exe
+
+      - name: Sign with SignPath
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist/signed
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          v=$(cat VERSION)
-          awk -v v="## $v" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
-          gh release create "v$v" "dist/AquaLite-Setup-$v.exe" --title "Aqua Lite $v" --notes-file notes.md \
-            || gh release upload "v$v" "dist/AquaLite-Setup-$v.exe" --clobber
+          v="${{ steps.build.outputs.version }}"
+          exe="dist/AquaLite-Setup-$v.exe"
+          if [ -f "dist/signed/AquaLite-Setup-$v.exe" ]; then exe="dist/signed/AquaLite-Setup-$v.exe"; fi
+          name=$(grep -m1 -E "^## $v( |$)" CHANGELOG.md | sed -E "s/^## $v( - )?//")
+          title="Aqua Lite $v${name:+ - $name}"
+          awk -v v="$v" 'index($0, "## " v) == 1 && (length($0) == length(v) + 3 || substr($0, length(v) + 4, 1) == " ") {f=1; next} /^## /{f=0} f' CHANGELOG.md > notes.md
+          printf '\n---\n**Install:** download `AquaLite-Setup-%s.exe` below and run it. Already have Aqua Lite? It updates itself.\n\n**Code signing policy:** free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org) - see the [README](https://github.com/undeadhuman37/aqua-lite#code-signing-policy).\n' "$v" >> notes.md
+          gh release create "v$v" "$exe" --title "$title" --notes-file notes.md \
+            || gh release upload "v$v" "$exe" --clobber

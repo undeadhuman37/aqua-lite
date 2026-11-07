@@ -20,15 +20,22 @@ VERSION = _read_version()   # the VERSION file at the repo root; bump it to ship
 
 
 def whats_new(version):
-    """The one-line summary under '## <version>' in CHANGELOG.md (shown once after an update)."""
+    """(update name, one-line summary) from the '## <version> - <name>' entry in CHANGELOG.md, shown once after
+    an update. ("", "") if there's no entry."""
+    import re
     try:
         with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "CHANGELOG.md"),
                   encoding="utf-8") as f:
             lines = [line.strip() for line in f]
-        i = lines.index(f"## {version}")
-        return next((line for line in lines[i + 1:] if line and not line.startswith("#")), "")[:52]
-    except (OSError, ValueError):
-        return ""
+    except OSError:
+        return "", ""
+    head = re.compile(r"^##\s+" + re.escape(version) + r"(?:\s+[-\u2013\u2014]\s+(.+))?$")
+    for i, line in enumerate(lines):
+        m = head.match(line)
+        if m:
+            summary = next((x for x in lines[i + 1:] if x and not x.startswith("#")), "")
+            return (m.group(1) or "").strip()[:40], summary[:52]
+    return "", ""
 
 
 def data_dir():

@@ -67,6 +67,12 @@ Open Settings from the tray icon, or launch **Aqua Lite** from the Start menu wh
 
 ## Privacy
 
+Aqua Lite has no account, no analytics and no telemetry. It only talks to the internet in these cases:
+- **Update check** when it starts: it asks GitHub for the newest version number and, if there's a new one, downloads it.
+  Nothing about you is sent. Turn it off with **Update automatically** in Settings.
+- **Speech models**: the offline models are downloaded once from [Hugging Face](https://huggingface.co).
+- **Cloud speech / AI formatting**, only if you add your own API key (see below).
+
 **Live words** run on a small offline model on your PC, never a cloud service. **Learning from corrections** reads
 the text box you just dictated into (through Windows UI Automation, the accessibility API) for up to 45 seconds,
 only to spot words you fixed. It never reads password boxes, and nothing leaves your PC. Both can be turned off in Settings.
@@ -74,6 +80,22 @@ only to spot words you fixed. It never reads password boxes, and nothing leaves 
 In offline mode nothing leaves your PC. With a cloud provider, only the recording and the formatting request
 (your dictionary plus the current app name and window title) go to that provider, using your own API key.
 Settings and history are stored locally in `%APPDATA%\AquaLite`.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+<sub>(Pending approval; until then, releases are unsigned.)</sub>
+
+Only the installer (`AquaLite-Setup-<version>.exe`) is signed. It is built from this repository by
+[GitHub Actions](.github/workflows/installer.yml) on GitHub-hosted runners, and every signing request is approved by hand.
+
+- Committers and reviewers: [undeadhuman37](https://github.com/undeadhuman37)
+- Approvers: [undeadhuman37](https://github.com/undeadhuman37)
+
+Privacy: see [Privacy](#privacy). The program doesn't send information to other networked systems unless you
+ask it to, apart from the update check and model downloads described there, which you can turn off. Third-party
+components keep their own policies: [Groq](https://groq.com/privacy-policy/), [OpenAI](https://openai.com/policies/privacy-policy),
+[Anthropic](https://www.anthropic.com/legal/privacy) and [Hugging Face](https://huggingface.co/privacy) apply only if you use them.
 
 ## How it works
 
