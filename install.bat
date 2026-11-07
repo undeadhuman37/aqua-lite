@@ -94,8 +94,8 @@ set "PS=%PS% foreach($f in @('Programs','Desktop','Startup')){ $p=[Environment]:
 powershell -NoProfile -ExecutionPolicy Bypass -Command "%PS%"
 
 echo.
-echo  Done! Aqua Lite is starting - look for the small bar at the bottom of your screen
-echo  and the icon in the system tray. Hold CTRL + WIN, speak, and let go.
+echo  Done! Aqua Lite is starting - look for its icon in the system tray.
+echo  Hold CTRL + WIN, speak, and let go. The bar appears while you talk.
 echo.
 start "" "%VENV%\Scripts\pythonw.exe" "%APPDIR%\AquaLite.pyw"
 timeout /t 8 >nul
