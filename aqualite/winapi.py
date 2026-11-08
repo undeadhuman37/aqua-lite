@@ -619,3 +619,81 @@ def fine_timer(on):
         _fine_timer = on
     except OSError:
         pass
+
+
+# ------------------------------------------------------------------ display timing (for frame pacing)
+class MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [("cbSize", W.DWORD), ("rcMonitor", W.RECT), ("rcWork", W.RECT), ("dwFlags", W.DWORD),
+                ("szDevice", W.WCHAR * 32)]
+
+
+class DEVMODEW(ctypes.Structure):
+    _fields_ = [("dmDeviceName", W.WCHAR * 32), ("dmSpecVersion", W.WORD), ("dmDriverVersion", W.WORD),
+                ("dmSize", W.WORD), ("dmDriverExtra", W.WORD), ("dmFields", W.DWORD),
+                ("dmUnion1", ctypes.c_byte * 16), ("dmColor", ctypes.c_short), ("dmDuplex", ctypes.c_short),
+                ("dmYResolution", ctypes.c_short), ("dmTTOption", ctypes.c_short), ("dmCollate", ctypes.c_short),
+                ("dmFormName", W.WCHAR * 32), ("dmLogPixels", W.WORD), ("dmBitsPerPel", W.DWORD),
+                ("dmPelsWidth", W.DWORD), ("dmPelsHeight", W.DWORD), ("dmDisplayFlags", W.DWORD),
+                ("dmDisplayFrequency", W.DWORD), ("dmRest", W.DWORD * 8)]
+
+
+_U64, _U32 = ctypes.c_uint64, ctypes.c_uint32
+
+
+class DWM_TIMING_INFO(ctypes.Structure):
+    _pack_ = 1   # dwmapi.h packs its structs to 1 byte
+    _fields_ = ([("cbSize", _U32), ("rateRefreshNum", _U32), ("rateRefreshDen", _U32), ("qpcRefreshPeriod", _U64),
+                 ("rateComposeNum", _U32), ("rateComposeDen", _U32), ("qpcVBlank", _U64), ("cRefresh", _U64),
+                 ("cDXRefresh", _U32), ("qpcCompose", _U64), ("cFrame", _U64), ("cDXPresent", _U32),
+                 ("cRefreshFrame", _U64), ("cFrameSubmitted", _U64), ("cDXPresentSubmitted", _U32),
+                 ("cFrameConfirmed", _U64), ("cDXPresentConfirmed", _U32), ("cRefreshConfirmed", _U64),
+                 ("cDXRefreshConfirmed", _U32), ("cFramesLate", _U64), ("cFramesOutstanding", _U32)]
+                + [(f"rest{i}", _U64) for i in range(21)])
+
+
+_proto(user32.EnumDisplaySettingsW, W.BOOL, W.LPCWSTR, W.DWORD, ctypes.POINTER(DEVMODEW))
+try:
+    dwmapi = ctypes.WinDLL("dwmapi")
+    _proto(dwmapi.DwmGetCompositionTimingInfo, ctypes.c_long, W.HWND, ctypes.POINTER(DWM_TIMING_INFO))
+except OSError:
+    dwmapi = None
+
+
+def _qpc_freq():
+    f = ctypes.c_int64()
+    return f.value if kernel32.QueryPerformanceFrequency(ctypes.byref(f)) and f.value else 0
+
+
+def display_timing():
+    """How often the screen under the cursor (where the Flow bar shows) refreshes, and when it last did.
+    Returns (seconds per refresh, time.perf_counter() of a recent refresh or None). Falls back to 60 Hz."""
+    hz = 0
+    try:
+        pt = W.POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        mi = MONITORINFOEXW()
+        mi.cbSize = ctypes.sizeof(MONITORINFOEXW)
+        if user32.GetMonitorInfoW(user32.MonitorFromPoint(pt, 2), ctypes.cast(ctypes.byref(mi), ctypes.POINTER(MONITORINFO))):
+            dm = DEVMODEW()
+            dm.dmSize = ctypes.sizeof(DEVMODEW)
+            if user32.EnumDisplaySettingsW(mi.szDevice, 0xFFFFFFFF, ctypes.byref(dm)):  # ENUM_CURRENT_SETTINGS
+                hz = dm.dmDisplayFrequency
+    except Exception:
+        hz = 0
+    period = 1.0 / hz if 23 <= hz <= 1000 else None   # 0 / 1 mean "hardware default"
+    vblank = None
+    try:  # the compositor's exact refresh period and the time of its last vblank, to line frames up with it
+        ti = DWM_TIMING_INFO()
+        ti.cbSize = ctypes.sizeof(DWM_TIMING_INFO)
+        freq = _qpc_freq()
+        if freq and dwmapi and dwmapi.DwmGetCompositionTimingInfo(None, ctypes.byref(ti)) == 0 \
+                and ti.qpcRefreshPeriod and ti.qpcVBlank:
+            dwm_period = ti.qpcRefreshPeriod / freq
+            if period is None or abs(dwm_period - period) / period < 0.03:  # same screen (mixed-Hz setups differ)
+                period = dwm_period
+                now = ctypes.c_int64()
+                kernel32.QueryPerformanceCounter(ctypes.byref(now))
+                vblank = ti.qpcVBlank / freq + (time.perf_counter() - now.value / freq)
+    except Exception:
+        vblank = None
+    return (period or 1 / 60), vblank

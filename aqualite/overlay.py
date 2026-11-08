@@ -1,5 +1,6 @@
 """The Flow bar: a glossy Frutiger Aero capsule at the bottom of the screen that never takes focus."""
 import collections
+import math
 import sys
 import time
 import tkinter as tk
@@ -12,7 +13,8 @@ IS_WIN = sys.platform == "win32"
 LISTENING = ("recording", "locked", "command")
 ANIMATED = LISTENING + ("processing",)
 SHOW_SECS, HIDE_SECS = 0.30, 0.22   # slide up from / down under the bottom edge of the screen
-FRAME = 1 / 60                      # frame pace while anything is moving
+FRAME = 1 / 60                      # frame pace when the screen's refresh rate can't be read
+MAX_FPS = 500                       # follows the monitor (60, 144, 240 Hz...) up to this
 REST_POLL = 0.1                     # how often to look in while nothing is moving
 SAMPLE_SECS = 1 / 30                # one new waveform bar every 33 ms (the scroll speed)
 FADE_SECS = 0.16                    # cross-fade when the bar changes state (recording -> processing -> toast)
@@ -66,6 +68,9 @@ class FlowBar:
         self.last_img, self.fade_from, self.fade_t0 = None, None, 0.0
         self.cap_alpha, self.cap_text = 0.0, ""
         self.job, self.next_due, self.was_active, self.last_keep = None, now, False, 0.0
+        # frame pacing: one frame per screen refresh, timed to land just before it
+        self.period, self.vblank, self.timing_at = FRAME, None, -10.0
+        self.cost, self.target, self.last_v = 0.004, None, 0.0
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
@@ -147,24 +152,58 @@ class FlowBar:
         self.job = None
         try:
             now = time.perf_counter()
+            # animate for the moment this frame reaches the screen (the refresh it was timed for), so timer
+            # wobble never shows up as uneven motion
+            show_at = self.target if self.target is not None and abs(self.target - now) < 0.05 else now
+            self.target = None
             self._sample(now)
             if self.dirty or self._active() or now - self.last_keep >= 1.0:
-                self._draw(now)
+                self._draw(show_at)
                 self.dirty = False
+                spent = time.perf_counter() - now
+                self.cost = min(0.05, max(0.0005, self.cost * 0.8 + spent * 0.2))
             self._schedule(self._active())
         except tk.TclError:
             return
 
+    def _timing(self, now):
+        """Re-read the screen's refresh rate and vblank time now and then (it changes when the bar moves to
+        another monitor or the user switches 60/144/240 Hz)."""
+        if now - self.timing_at < 1.0:
+            return
+        self.timing_at = now
+        if IS_WIN:
+            from . import winapi
+            try:
+                period, self.vblank = winapi.display_timing()
+            except Exception:
+                period, self.vblank = FRAME, None
+        else:
+            period, self.vblank = FRAME, None
+        self.period = max(period, 1 / MAX_FPS)
+
     def _schedule(self, active):
         now = time.perf_counter()
         if active:
-            # pace frames against a running deadline, so a slow frame doesn't push every later one back
-            self.next_due = self.next_due + FRAME if self.was_active else now + FRAME
-            if self.next_due < now:  # fell well behind (busy PC): skip ahead rather than rush to catch up
-                self.next_due = now + 0.001
-            delay = self.next_due - now
+            self._timing(now)   # forced fresh on the first frame after resting (timing_at reset below)
+            p = self.period
+            if self.vblank is not None:
+                # next refresh we can make: start early enough to draw it (cost) plus a little timer slack
+                lead = self.cost + 0.0015
+                v = self.vblank + math.ceil((now + lead + 0.0005 - self.vblank) / p) * p
+                if v < self.last_v + p * 0.5:  # never two frames for one refresh
+                    v = self.last_v + p
+                self.last_v, self.target = v, v
+                delay = v - lead - now
+            else:
+                # pace frames against a running deadline, so a slow frame doesn't push every later one back
+                self.next_due = self.next_due + p if self.was_active else now + p
+                if self.next_due < now:  # fell well behind (busy PC): skip ahead rather than rush to catch up
+                    self.next_due = now + 0.001
+                delay = self.next_due - now
         else:
             delay = REST_POLL
+            self.timing_at = -10.0
         if IS_WIN and active != self.was_active:
             from . import winapi
             winapi.fine_timer(active)
@@ -215,9 +254,9 @@ class FlowBar:
 
     # ---------------------------------------------------------------- drawing
     def _draw(self, now):
-        dt, self.last_frame = min(now - self.last_frame, 0.1), now
+        dt, self.last_frame = max(0.0, min(now - self.last_frame, 0.1)), now
         if self.shown in (0.0, 1.0):  # starting from rest: the last frame may have been long ago
-            dt = min(dt, FRAME * 1.25)
+            dt = min(dt, self.period * 1.25)
         if self._visible():
             self.face = (self.state, self.label, self.kind, self.caption)
             key = self.face[:3]

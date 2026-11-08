@@ -32,6 +32,40 @@ def _font(size):
     return ImageFont.load_default()
 
 
+def _font_px(size):
+    try:
+        return _font(size)          # Pillow 10.1+ takes fractional sizes
+    except (TypeError, ValueError):
+        return _font(max(1, round(size)))
+
+
+# text looks: (ink, soft shadow colour, shadow offset in px, shadow blur)
+TEXT_STYLES = {
+    "light": ((255, 255, 255, 255), (0, 42, 92, 175), (0, 1), 1.0),     # white words on the aqua glass
+    "dark": ((12, 58, 102, 255), (255, 255, 255, 210), (0, 1), 0.7),    # navy words on the pale caption bubble
+}
+
+
+def text_sprite(text, font, style, anchor):
+    """Words with a soft shadow, as a small RGBA image, plus where its corner sits relative to the anchor point.
+    Ink and shadow are blended properly, so no see-through fringes around the letters."""
+    ink, shade, (sx, sy), blur = TEXT_STYLES[style]
+    l, t, r, b = font.getbbox(text, anchor=anchor)
+    pad = 2 + int(blur * 2 + 0.99) + max(abs(sx), abs(sy))
+    w, h = max(1, r - l + 2 * pad), max(1, b - t + 2 * pad)
+    m = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(m).text((pad - l, pad - t), text, font=font, fill=255, anchor=anchor)
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    sm = m.filter(ImageFilter.GaussianBlur(blur)) if blur else m
+    sh = Image.new("RGBA", (w, h), shade[:3] + (0,))
+    sh.putalpha(sm.point(lambda v: v * shade[3] // 255))
+    out.alpha_composite(sh, (max(0, sx), max(0, sy)), (max(0, -sx), max(0, -sy)))
+    fg = Image.new("RGBA", (w, h), ink[:3] + (0,))
+    fg.putalpha(m.point(lambda v: v * ink[3] // 255))
+    out.alpha_composite(fg)
+    return out, (l - pad, t - pad)
+
+
 def vgradient(w, h, top, bottom):
     """Vertical gradient image (RGBA). Colours may be RGB or RGBA tuples."""
     top = tuple(top) + (255,) * (4 - len(top))
@@ -191,8 +225,9 @@ class FlowBarRenderer:
         self.cache = {}
         self.bubbles = Bubbles()
         self.last_t = None
-        self.font = _font(int(12.5 * scale * SS))
-        self.small = _font(int(11 * scale * SS))
+        self.font = _font_px(12.5 * scale)    # text is drawn at the final size, so the font's own hinting
+        self.small = _font_px(11 * scale)     # keeps letters sharp (drawing big and shrinking smeared them)
+        self.texts, self.text_cache = [], {}
 
     def _u(self, v):
         return int(v * self.scale * SS)
@@ -235,7 +270,7 @@ class FlowBarRenderer:
 
     def _caption(self, img, text, above_y, alpha=1.0):
         """A small glass bubble above the bar with the newest words of what you're saying (alpha < 1 fades it)."""
-        maxw = (self.W - 40) * self.scale * SS
+        maxw = (self.W - 40) * self.scale
         words = (text or "").split()
         shown = shape_for_display(" ".join(words), self.small)
         while words and (not shown or self.small.getlength(shown) > maxw):  # keep the newest words that fit
@@ -243,24 +278,40 @@ class FlowBarRenderer:
             shown = shape_for_display("\u2026 " + " ".join(words), self.small)
         if not words or not shown:
             return
-        tw = self.small.getlength(shown) / (self.scale * SS)
+        tw = self.small.getlength(shown) / self.scale
         w = min(self.W - 16, int(tw / 32 + 1) * 32 + 24)  # widths in steps, so only a few bubble sizes get cached
         h = 24
         box, base, over = self._cap_glass(w, h, above_y)
         target = img if alpha >= 1 else Image.new("RGBA", self.big, (0, 0, 0, 0))
         target.alpha_composite(base)
-        d = ImageDraw.Draw(target)
-        cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
-        d.text((cx, cy + SS), shown, font=self.small, fill=(255, 255, 255, 160), anchor="mm")
-        d.text((cx, cy), shown, font=self.small, fill=(10, 60, 105, 255), anchor="mm")
         target.alpha_composite(over)
+        self._text(shown, self.small, "dark", (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, "mm", alpha)
         if target is not img:
             target.putalpha(target.getchannel("A").point(lambda v: int(v * alpha + 0.5)))
             img.alpha_composite(target)
 
     def _down(self, img):
-        """Supersampled canvas -> final size. A plain 2x2 average: smooth edges, and far quicker than Lanczos."""
-        return img.reduce(SS) if img.size == self.big and SS > 1 else img.resize(self.size, Image.LANCZOS)
+        """Supersampled canvas -> final size (a plain 2x2 average: smooth edges, far quicker than Lanczos),
+        then the words go on top at full sharpness."""
+        img = img.reduce(SS) if img.size == self.big and SS > 1 else img.resize(self.size, Image.LANCZOS)
+        for text, font, style, x, y, anchor, alpha in self.texts:
+            key = (text, font.size, style, anchor)
+            if key not in self.text_cache:
+                if len(self.text_cache) > 64:
+                    self.text_cache.pop(next(iter(self.text_cache)))
+                self.text_cache[key] = text_sprite(text, font, style, anchor)
+            sp, (dx, dy) = self.text_cache[key]
+            if alpha < 1:
+                sp = sp.copy()
+                sp.putalpha(sp.getchannel("A").point(lambda v: int(v * alpha + 0.5)))
+            _stamp(img, sp, int(round(x / SS)) + dx, int(round(y / SS)) + dy)
+        self.texts = []
+        return img
+
+    def _text(self, text, font, style, x, y, anchor, alpha=1.0):
+        """Queue words for the sharp pass; x, y are in the 2x canvas like everything else."""
+        if text:
+            self.texts.append((text, font, style, x, y, anchor, alpha))
 
     def _bars(self, box, levels, phase):
         """The waveform: one bar per level sample, newest on the right. `phase` (0..1) is how far the newest bar has
@@ -289,6 +340,7 @@ class FlowBarRenderer:
         """`t` is a clock in seconds: pulses, bouncing dots and bubbles move by real time, not by frames drawn."""
         dt = 1 / 30 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.1)
         self.last_t = t
+        self.texts = []
         if state == "hidden":
             return Image.new("RGBA", self.size, (0, 0, 0, 0))
         if state == "idle":
@@ -320,8 +372,7 @@ class FlowBarRenderer:
             if wide:
                 tag = "Command" if state == "command" else "Hands-free"
                 tx = x0 + self._u(42) + BARS * self._u(7) + self._u(6)
-                d.text((tx + SS, cy + SS), tag, font=self.small, fill=(0, 60, 110, 120), anchor="lm")
-                d.text((tx, cy), tag, font=self.small, fill=(255, 255, 255, 250), anchor="lm")
+                self._text(tag, self.small, "light", tx, cy, "lm")
                 orb(img, x1 - self._u(22), cy, self._u(8), ((255, 255, 255), (150, 200, 230)))
                 d = ImageDraw.Draw(img)
                 s = self._u(3.2)
@@ -345,18 +396,15 @@ class FlowBarRenderer:
             return self._down(img)
         # toast
         text = label[:64]
-        tw = self.font.getlength(text) / (self.scale * SS)
+        tw = self.font.getlength(text) / self.scale
         w = min(self.W - 16, int(tw) + 64)
         box, base, over = self._glass(("toast", w), w, 36)
         img = base.copy()
         x0, y0, x1, y1 = box
         cy = (y0 + y1) // 2
         orb(img, x0 + self._u(18), cy, self._u(6.5), ORB.get(kind, ORB["info"]))
-        d = ImageDraw.Draw(img)
-        tx = x0 + self._u(32)
-        d.text((tx + SS, cy + SS), text, font=self.font, fill=(0, 50, 100, 140), anchor="lm")
-        d.text((tx, cy), text, font=self.font, fill=(255, 255, 255, 255), anchor="lm")
         img.alpha_composite(over)
+        self._text(text, self.font, "light", x0 + self._u(32), cy, "lm")
         return self._down(img)
 
 
@@ -392,6 +440,10 @@ def shape_for_display(text, font):
 
 
 def premultiplied_bgra(img):
+    try:
+        return img.tobytes("raw", "BGRa")   # Pillow premultiplies while packing: ~6x quicker than numpy
+    except (ValueError, KeyError, OSError):
+        pass
     import numpy as np
     a = np.asarray(img, dtype=np.uint16)
     alpha = a[..., 3:4]

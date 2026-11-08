@@ -4,8 +4,10 @@ Headings are `## <version>` or `## <version> - <update name>`. The first line un
 shows once after updating (keep it under 52 characters).
 
 ## 1.3.2
-smoother Flow bar animations
-- The Flow bar now animates at 60 fps with evenly spaced frames, and draws each frame about 3x faster.
+smoother Flow bar and sharper text
+- The Flow bar now runs at your monitor's full refresh rate (60, 144, 240 Hz and up), with every frame
+  timed to land exactly when the screen refreshes.
+- Sharper, cleaner text on the bar, with a soft shadow instead of a rough one.
 - The waveform glides smoothly instead of jumping, and the bars no longer flicker on every sound.
 - The bar fades between states (listening, thinking, done) instead of snapping, and the live-words bubble fades in and out.
 
