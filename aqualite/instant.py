@@ -56,7 +56,7 @@ class Agreement:
         for a, b in zip(new, self.pending):
             if not norm(a[0]) or norm(a[0]) != norm(b[0]):
                 break
-            agreed.append(a)
+            agreed.append((b[0], a[1], a[2]))   # keep the spelling already on screen, so it isn't retyped
         self.committed += agreed
         self.pending = new[len(agreed):]
         return agreed
@@ -82,13 +82,33 @@ def presses(text):
     return sum(1 for c in text if not unicodedata.combining(c))
 
 
-class Streamer:
-    """Runs the passes on its own thread. type_fn(text) -> bool types text into the app; before_first() runs once,
-    right before the first word is typed; on_caption(text) shows what's being heard in the Flow bar."""
+def common_prefix(a, b):
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return n
 
-    def __init__(self, recorder, cfg, model, type_fn, before_first=None, on_caption=None, allow=None):
+
+class Streamer:
+    """Runs the passes on its own thread and keeps the text box in step with what's being heard.
+
+    Word by word: every word is typed as soon as a pass hears it. The newest words are still guesses, so when the
+    next pass hears them differently, they're backspaced and retyped - but only after check(text) confirms the box
+    still ends with exactly what was typed (so your own text is never touched). If the box can't be read, it
+    types only words two passes agree on and never backspaces.
+
+    type_fn(text) -> bool types; delete_fn(n) -> bool presses Backspace n times; check(text) -> True / False /
+    None (can't read the box); before_first() runs once before the first word; on_caption(text) for the bar."""
+
+    def __init__(self, recorder, cfg, model, type_fn, before_first=None, on_caption=None, allow=None,
+                 delete_fn=None, check=None):
         self.recorder, self.cfg, self.model = recorder, cfg, model
         self.type_fn, self.before_first, self.on_caption = type_fn, before_first, on_caption
+        self.delete_fn, self.check = delete_fn, check
+        self.fixing = delete_fn is not None and check is not None   # may correct guesses (else confirmed only)
+        self.begun = False          # the first word has gone in (allow / before_first done)
         self.allow = allow or (lambda: True)   # checked before the first word: e.g. not a password box
         self.agree = Agreement()
         self.offset = 0.0           # where the re-read window starts (seconds into the recording)
@@ -144,34 +164,72 @@ class Streamer:
         heard = join_words(words)
         if heard and stt.is_hallucination(heard, 1.0):
             words = []
-        new = self.agree.insert(words)
-        if new:
-            self._type(new)
+        self.agree.insert(words)
+        self._render()
         if self.on_caption:
             shown = self.agree.committed[-8:] + self.agree.pending
             self.on_caption(join_words(shown))
         self._trim()
         return True
 
-    def _type(self, words):
-        text = join_words(words, first=not self.typed)
-        if not text:
-            return
+    def target(self):
+        """What the box should show now: confirmed words, plus the newest guesses when they can be corrected."""
+        words = self.agree.committed + (self.agree.pending if self.fixing else [])
+        return join_words(words)
+
+    def _render(self):
         with self.lock:
             if self.closed or self.stop_event.is_set():
                 return
-            if not self.typed:
+            want, have = self.target(), self.typed
+            if want == have or not want:
+                return
+            keep = common_prefix(have, want)
+            if keep < len(have):
+                if not self.fixing:
+                    return
+                if keep < len(want):   # redo whole words: back up to the start of the word that differs
+                    keep = have.rfind(" ", 0, keep) + 1
+                if not self._safe_to_fix(have):
+                    return
+                if not self.delete_fn(presses(have[keep:])):
+                    return self._halt("backspace was blocked")
+                self.typed = have = have[:keep]
+            add = want[len(have):]
+            if not add:
+                return
+            if not self.begun:
                 if not self.allow():
-                    log.info("instant text: not typing into this box")
-                    self.stop_event.set()
+                    return self._halt("not typing into this box")
+                if self.fixing and self.check("") is None:
+                    # can't read this box, so corrections couldn't be checked: confirmed words only, no backspace
+                    log.info("instant text: can't read this box, typing confirmed words only")
+                    self.fixing = False
                     return
                 if self.before_first:
                     self.before_first()
-            if self.type_fn(text):
-                self.typed += text
-            else:
-                log.info("instant text: typing was blocked, stopping")
-                self.stop_event.set()
+                self.begun = True
+            # one word at a time, so it reads like typing rather than chunks appearing
+            pieces = re.findall(r"\s*\S+\s*", add) or [add]
+            gap = min(0.05, 0.2 / max(1, len(pieces)))
+            for i, piece in enumerate(pieces):
+                if self.stop_event.is_set():
+                    return
+                if not self.type_fn(piece):
+                    return self._halt("typing was blocked")
+                self.typed += piece
+                if i < len(pieces) - 1:
+                    time.sleep(gap)
+
+    def _safe_to_fix(self, have):
+        if self.check(have):
+            return True
+        self._halt("the text box changed")   # a click, an edit, or it can't be read any more: hands off
+        return False
+
+    def _halt(self, why):
+        log.info("instant text: %s, stopping", why)
+        self.stop_event.set()
 
     def _trim(self):
         """Keep the re-read window short (each pass gets slower as it grows): start it after the last finished

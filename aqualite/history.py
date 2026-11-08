@@ -89,15 +89,21 @@ def add_correction(app, category, before, after):
         c.commit()
 
 
-def corrections_for(category, limit=6):
+def corrections_for(category, limit=6, same_only=False):
     """Most recent edits, ones made in the same kind of app first. Returned oldest -> newest."""
     with _lock:
         same = db().execute("SELECT before, after FROM corrections WHERE category = ? ORDER BY id DESC LIMIT ?",
                             (category, limit)).fetchall()
-        rest = [] if len(same) >= limit else db().execute(
+        rest = [] if (len(same) >= limit or same_only) else db().execute(
             "SELECT before, after FROM corrections WHERE category != ? ORDER BY id DESC LIMIT ?",
             (category, limit - len(same))).fetchall()
     return list(reversed(same + rest))
+
+
+def all_corrections():
+    """Every learned edit as (category, before, after), oldest first (for exporting your memory)."""
+    with _lock:
+        return db().execute("SELECT category, before, after FROM corrections ORDER BY id").fetchall()
 
 
 def correction_count():

@@ -68,7 +68,7 @@ class PreviewModel:
 class InstantModel(PreviewModel):
     """The model behind instant text. 'auto' picks the more accurate "small" model when this PC runs it fast enough
     (timed once at startup), otherwise the quick "base" one. Uses more processor threads than the bar preview."""
-    FAST_ENOUGH = 0.75   # seconds per pass on a few seconds of audio
+    FAST_ENOUGH = 0.45   # seconds per pass: word-by-word needs quick passes (the final swap fixes accuracy)
 
     def __init__(self):
         super().__init__(threads=max(2, min(8, (os.cpu_count() or 4) // 2)))

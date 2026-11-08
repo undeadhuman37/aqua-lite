@@ -94,10 +94,18 @@ def _examples(pairs):
     return "\n".join(f"- You wrote: {b!r}\n  They changed it to: {a!r}" for b, a in pairs)
 
 
+PROFILE_BLOCK = """
+
+How this user writes here (their style profile, learned from their edits; follow it where it fits):
+{profile}"""
+
+
 def _extras(ctx, command=False):
-    """Optional prompt sections: learned edits, what's on screen, what's already in the box."""
+    """Optional prompt sections: style profile, learned edits, what's on screen, what's already in the box."""
     out = ""
     app = ctx.get("app") or "the app"
+    if ctx.get("profile") and not command:
+        out += PROFILE_BLOCK.format(profile=ctx["profile"])
     if ctx.get("examples") and not command:
         out += LEARNED_BLOCK.format(examples=_examples(ctx["examples"]))
     if ctx.get("screen"):

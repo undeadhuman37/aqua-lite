@@ -7,8 +7,8 @@ import threading
 import time
 import tkinter as tk
 
-from . import (audio, config, context, deps, edits, history, hotkeys, instant, learn, live, llm, localai, music, report,
-               sounds, stt, textproc, updater)
+from . import (audio, config, context, deps, edits, history, hotkeys, instant, learn, live, llm, localai, memory, music,
+               report, sounds, stt, textproc, updater)
 from .overlay import FlowBar
 
 IS_WIN = sys.platform == "win32"
@@ -110,6 +110,7 @@ class App:
         swallowed = self.machine.on_key(vk, is_down)
         if is_down and not swallowed and self.instant is not None and vk not in hotkeys.MODIFIER_VKS:
             self.user_typed = True   # they typed while words were going in live: don't trust the box blindly
+            self.instant[0].stop_event.set()   # and stop typing into it right away
         return swallowed
 
     def _on_hotkey(self, name, command):  # runs on the hook thread: must be quick
@@ -230,9 +231,22 @@ class App:
         def type_here(text):  # only ever into the window the dictation started in
             return winapi.user32.GetForegroundWindow() == hwnd and winapi.type_text(text)
 
+        def backspace_here(n):
+            if winapi.user32.GetForegroundWindow() != hwnd:
+                return False
+            winapi.tap_key("backspace", n)
+            return True
+
+        def box_ends_with(text):  # True / False, or None if this box can't be read
+            before, exact = instant.text_before_caret(len(text))
+            if before is None:
+                return None
+            return instant.safe_to_replace(text, before, exact, False) if text else True
+
+        # no live-words bubble here: the words are going straight into the text box
         st = instant.Streamer(self.recorder, cfg, live.INSTANT, type_here, before_first,
-                              on_caption=lambda text: self.post("caption", text),
-                              allow=lambda: not instant.is_password_box())
+                              allow=lambda: not instant.is_password_box(),
+                              delete_fn=backspace_here, check=box_ends_with)
         self.instant = (st, (hwnd, proc, title, pid))
         st.start()
 
@@ -608,7 +622,8 @@ class App:
         ctx.update(screen=screen, draft=draft)
         if mode == "dictation" and cfg.get("learn_style", True):
             try:
-                ctx["examples"] = history.corrections_for(ctx["category"])
+                ctx["profile"] = memory.for_kind(ctx["category"])
+                ctx["examples"] = history.corrections_for(ctx["category"], 4 if ctx["profile"] else 6)
             except Exception as e:
                 log.warning("learned edits unavailable: %s", e)
         status = "ok"
@@ -725,6 +740,27 @@ class App:
         app, cat = self.edit_where
         history.add_correction(app, cat, *pair)
         log.info("learned an edit in %s (%s), %d chars -> %d chars", app, cat, len(pair[0]), len(pair[1]))
+        self.update_memory()
+
+    def update_memory(self, force=False, done=None):
+        """Rebuild the style profile in the background (every few new learned edits, or now when forced)."""
+        cfg = self.cfg
+        if not llm.resolve_provider(cfg):
+            if done:
+                done(False, "Needs AI formatting (an API key, or private mode)")
+            return
+
+        def run():
+            try:
+                changed = memory.update(cfg, lambda s, u: llm.chat(cfg, s, u, max_tokens=900, timeout=60),
+                                        history.corrections_for, history.correction_count, force)
+                if done:
+                    done(changed, "Updated" if changed else "Nothing new to learn yet")
+            except Exception as e:
+                log.warning("memory: profile not rebuilt: %s", e)
+                if done:
+                    done(False, f"Couldn't update: {str(e)[:80]}")
+        threading.Thread(target=run, daemon=True, name="memory").start()
 
     def ev_learned(self, words):
         dic = list(self.cfg.get("dictionary", []))

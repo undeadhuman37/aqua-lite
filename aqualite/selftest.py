@@ -255,11 +255,37 @@ def check_instant():
     a = instant.Agreement()
     w = lambda t, s: (" " + t, s, s + 0.3)
     assert a.insert([w("Hey", 0.1), w("Patrisio", 0.5)]) == []                     # first pass: nothing is sure yet
-    assert [x[0] for x in a.insert([w("hey", 0.1), w("Patricio", 0.5), w("the", 0.9)])] == [" hey"]
-    assert [x[0] for x in a.insert([w("Hey", 0.1), w("Patricio,", 0.5), w("the", 0.9)])] == [" Patricio,", " the"]
+    assert [x[0] for x in a.insert([w("hey", 0.1), w("Patricio", 0.5), w("the", 0.9)])] == [" Hey"]  # keeps on-screen form
+    assert [x[0] for x in a.insert([w("Hey", 0.1), w("Patricio,", 0.5), w("the", 0.9)])] == [" Patricio", " the"]
     assert a.insert([w("the", 0.92), w("samples", 1.3)]) == []                     # re-heard 'the' isn't doubled
     assert [x[0] for x in a.insert([w("samples", 1.31), w("arrived", 1.7)])] == [" samples"]
-    assert a.text() == "hey Patricio, the samples"
+    assert a.text() == "Hey Patricio the samples"
+    # word by word: guesses go in at once and get fixed when re-heard, only after checking the box
+    box, words = ["Re: "], [[("Hey", 0.1, 0.4), ("Patrisio", 0.5, 0.9)], [("Hey", 0.1, 0.4), ("Patricio", 0.5, 0.9)]]
+
+    class Rec:
+        duration, speech_frames = 2.0, 1
+
+        def audio_from(self, off):
+            return [0.0] * 32000
+
+    class Model:
+        def words(self, audio, cfg, prompt=""):
+            return words.pop(0)
+
+    def typer(t):
+        box[0] += t
+        return True
+
+    def eraser(n):
+        box[0] = box[0][:-n]
+        return True
+    st = instant.Streamer(Rec(), {}, Model(), typer, delete_fn=eraser, check=lambda t: box[0].endswith(t))
+    st.step()
+    assert box[0] == "Re: Hey Patrisio"
+    st.step()
+    assert box[0] == "Re: Hey Patricio" and st.typed == "Hey Patricio"
+    assert instant.common_prefix("abc", "abd") == 2
     assert instant.join_words([(" Hello", 0, 1), ("world.", 1, 2)], first=False) == " Hello world."
     assert instant.presses("caf\u00e9") == 4 and instant.presses("cafe\u0301") == 4 and instant.presses("") == 0
     ok = instant.safe_to_replace
