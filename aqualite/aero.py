@@ -5,7 +5,7 @@ import random
 import re
 import sys
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 SS = 2  # supersampling for smooth edges
 
@@ -85,53 +85,98 @@ def glass_capsule(size, box, top=SKY_TOP, bottom=SKY_BOTTOM, glow=None, shadow=T
     return base, over
 
 
+_SPRITES = {}   # orbs and glows are drawn once per size/colour, then stamped every frame
+
+
+def _orb_sprite(r, colors):
+    key = ("orb", r, colors)
+    if key not in _SPRITES:
+        top, bottom = colors
+        pad = 2 * SS
+        size = int(r * 2)
+        S = size + 2 * pad
+        # pixels are written (not blended) exactly as the orb has always been drawn; `cov` marks which ones
+        sp = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+        cov = Image.new("L", (S, S), 0)
+        body = vgradient(size, size, top, bottom)
+        m = Image.new("L", (size, size), 0)
+        ImageDraw.Draw(m).ellipse((0, 0, size - 1, size - 1), fill=255)
+        sp.paste(body, (pad, pad), m)
+        cov.paste(255, (pad, pad), m)
+        ring = (pad, pad, pad + 2 * r, pad + 2 * r)
+        ImageDraw.Draw(sp).ellipse(ring, width=SS,
+                                   outline=(0, 60, 40, 160) if colors == ORB["recording"] else (20, 40, 90, 150))
+        ImageDraw.Draw(cov).ellipse(ring, width=SS, outline=255)
+        hl = vgradient(int(r * 1.3), int(r * 0.8), (255, 255, 255, 235), (255, 255, 255, 30))
+        hm = Image.new("L", hl.size, 0)
+        ImageDraw.Draw(hm).ellipse((0, 0, hl.size[0] - 1, hl.size[1] - 1), fill=255)
+        at = (pad + int(r * 0.35), pad + int(r * 0.1))
+        sp.paste(hl, at, hm)
+        cov.paste(255, at, hm)
+        _SPRITES[key] = (sp, cov, pad)
+    return _SPRITES[key]
+
+
+def _glow_sprite(r, color):
+    key = ("glow", r, color)
+    if key not in _SPRITES:
+        half = int(r * 3.8)
+        m = Image.new("L", (2 * half, 2 * half), 0)
+        ImageDraw.Draw(m).ellipse((half - r * 1.8, half - r * 1.8, half + r * 1.8, half + r * 1.8), fill=140)
+        _SPRITES[key] = (m.filter(ImageFilter.GaussianBlur(r * 0.6)), Image.new("RGBA", m.size, color + (0,)), half)
+    return _SPRITES[key]
+
+
 def orb(img, cx, cy, r, colors, pulse=0.0):
-    """Glossy marble with a highlight, like an Aero button."""
-    top, bottom = colors
+    """Glossy marble with a highlight, like an Aero button. `pulse` (0..1) adds a soft breathing glow."""
     if pulse > 0:
-        g = Image.new("L", img.size, 0)
-        ImageDraw.Draw(g).ellipse((cx - r * 1.8, cy - r * 1.8, cx + r * 1.8, cy + r * 1.8), fill=int(140 * pulse))
-        g = g.filter(ImageFilter.GaussianBlur(r * 0.6))
-        layer = Image.new("RGBA", img.size, bottom + (0,))
-        layer.putalpha(g)
-        img.alpha_composite(layer)
-    size = int(r * 2)
-    body = vgradient(size, size, top, bottom)
-    m = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(m).ellipse((0, 0, size - 1, size - 1), fill=255)
-    img.paste(body, (int(cx - r), int(cy - r)), m)
-    d = ImageDraw.Draw(img)
-    d.ellipse((cx - r, cy - r, cx + r, cy + r), outline=(0, 60, 40, 160) if colors == ORB["recording"] else (20, 40, 90, 150), width=SS)
-    hl = vgradient(int(r * 1.3), int(r * 0.8), (255, 255, 255, 235), (255, 255, 255, 30))
-    hm = Image.new("L", hl.size, 0)
-    ImageDraw.Draw(hm).ellipse((0, 0, hl.size[0] - 1, hl.size[1] - 1), fill=255)
-    img.paste(hl, (int(cx - r * 0.65), int(cy - r * 0.9)), hm)
+        mask, layer, half = _glow_sprite(r, colors[1])
+        layer = layer.copy()
+        layer.putalpha(mask.point(lambda v: int(v * pulse + 0.5)))
+        x, y = int(round(cx)) - half, int(round(cy)) - half
+        _stamp(img, layer, x, y)
+    sp, cov, pad = _orb_sprite(r, colors)
+    img.paste(sp, (int(round(cx - r)) - pad, int(round(cy - r)) - pad), cov)
+
+
+def _stamp(img, sprite, x, y):
+    """alpha_composite a small image at (x, y), clipping whatever hangs off the edges."""
+    sx, sy = max(0, -x), max(0, -y)
+    w, h = min(sprite.width, img.width - x) - sx, min(sprite.height, img.height - y) - sy
+    if w > 0 and h > 0:
+        img.alpha_composite(sprite, (x + sx, y + sy), (sx, sy, sx + w, sy + h))
 
 
 class Bubbles:
     def __init__(self):
         self.items = []
 
-    def step(self, box, level, rate=1.0):
+    def step(self, box, level, dt=1 / 30, rate=1.0):
+        """Move by real time passed (speeds are per 1/30 s), so bubbles rise at the same pace at any frame rate."""
         x0, y0, x1, y1 = box
-        if random.random() < (0.08 + level * 0.9) * rate:
+        f = dt * 30
+        if random.random() < min(1.0, (0.08 + level * 0.9) * rate * f):
             r = random.uniform(1.6, 4.2) * SS
             self.items.append([random.uniform(x0 + 20 * SS, x1 - 20 * SS), y1 - r, r,
                                random.uniform(0.5, 1.4) * SS * (1 + level * 2), random.uniform(0, 6.28)])
         alive = []
         for b in self.items:
-            b[1] -= b[3]
-            b[0] += math.sin(b[4] + b[1] / (9 * SS)) * 0.4 * SS
+            b[1] -= b[3] * f
+            b[0] += math.sin(b[4] + b[1] / (9 * SS)) * 0.4 * SS * f
             if b[1] > y0 + b[2]:
                 alive.append(b)
         self.items = alive[-40:]
 
-    def draw(self, img):
+    def draw(self, img, ox=0, oy=0):
         d = ImageDraw.Draw(img)
         for x, y, r, _vy, _p in self.items:
+            x, y = x - ox, y - oy
             d.ellipse((x - r, y - r, x + r, y + r), outline=(255, 255, 255, 170), width=max(1, SS // 2 + 1),
                       fill=(255, 255, 255, 35))
             d.ellipse((x - r * 0.45, y - r * 0.6, x - r * 0.05, y - r * 0.2), fill=(255, 255, 255, 220))
+
+
+BARS = 14   # waveform slots in the Flow bar
 
 
 class FlowBarRenderer:
@@ -145,6 +190,7 @@ class FlowBarRenderer:
         self.big = (self.size[0] * SS, self.size[1] * SS)
         self.cache = {}
         self.bubbles = Bubbles()
+        self.last_t = None
         self.font = _font(int(12.5 * scale * SS))
         self.small = _font(int(11 * scale * SS))
 
@@ -164,8 +210,31 @@ class FlowBarRenderer:
             self.cache[key] = (box,) + glass_capsule(self.big, box, **kw)
         return self.cache[key]
 
-    def _caption(self, img, text, above_y):
-        """A small glass bubble above the bar with the newest words of what you're saying."""
+    def _cap_glass(self, w, h, above_y):
+        key = ("cap", w)
+        if key not in self.cache:
+            W, _H = self.big
+            y1 = above_y - self._u(6)
+            box = (W // 2 - self._u(w) // 2, y1 - self._u(h), W // 2 + self._u(w) // 2, y1)
+            self.cache[key] = (box,) + glass_capsule(self.big, box, (232, 248, 255), (150, 205, 240), shadow=True)
+        return self.cache[key]
+
+    def warm_steps(self):
+        """Small jobs that pre-build the glass for the common states and caption sizes, so the first recording
+        doesn't stutter while they're made. Run them one at a time while the app is idle."""
+        steps = [lambda st=st: self._warm(st) for st in ("recording", "locked", "command", "processing", "idle")]
+        y0 = self._box(184, 42)[1]
+        for w in sorted({min(self.W - 16, k * 32 + 24) for k in range(1, 14)}):
+            steps.append(lambda w=w: self._cap_glass(w, 24, y0))
+        return steps
+
+    def _warm(self, state):
+        saved = self.last_t, self.bubbles.items
+        self.render(state, "", [0.0] * (BARS + 1), 0.0)
+        self.last_t, self.bubbles.items = saved
+
+    def _caption(self, img, text, above_y, alpha=1.0):
+        """A small glass bubble above the bar with the newest words of what you're saying (alpha < 1 fades it)."""
         maxw = (self.W - 40) * self.scale * SS
         words = (text or "").split()
         shown = shape_for_display(" ".join(words), self.small)
@@ -177,58 +246,80 @@ class FlowBarRenderer:
         tw = self.small.getlength(shown) / (self.scale * SS)
         w = min(self.W - 16, int(tw / 32 + 1) * 32 + 24)  # widths in steps, so only a few bubble sizes get cached
         h = 24
-        key = ("cap", w)
-        if key not in self.cache:
-            W, _H = self.big
-            y1 = above_y - self._u(6)
-            box = (W // 2 - self._u(w) // 2, y1 - self._u(h), W // 2 + self._u(w) // 2, y1)
-            self.cache[key] = (box,) + glass_capsule(self.big, box, (232, 248, 255), (150, 205, 240), shadow=True)
-        box, base, over = self.cache[key]
-        img.alpha_composite(base)
-        d = ImageDraw.Draw(img)
+        box, base, over = self._cap_glass(w, h, above_y)
+        target = img if alpha >= 1 else Image.new("RGBA", self.big, (0, 0, 0, 0))
+        target.alpha_composite(base)
+        d = ImageDraw.Draw(target)
         cx, cy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
         d.text((cx, cy + SS), shown, font=self.small, fill=(255, 255, 255, 160), anchor="mm")
         d.text((cx, cy), shown, font=self.small, fill=(10, 60, 105, 255), anchor="mm")
-        img.alpha_composite(over)
+        target.alpha_composite(over)
+        if target is not img:
+            target.putalpha(target.getchannel("A").point(lambda v: int(v * alpha + 0.5)))
+            img.alpha_composite(target)
 
-    def render(self, state, label="", levels=(), tick=0, kind="info", caption=""):
+    def _down(self, img):
+        """Supersampled canvas -> final size. A plain 2x2 average: smooth edges, and far quicker than Lanczos."""
+        return img.reduce(SS) if img.size == self.big and SS > 1 else img.resize(self.size, Image.LANCZOS)
+
+    def _bars(self, box, levels, phase):
+        """The waveform: one bar per level sample, newest on the right. `phase` (0..1) is how far the newest bar has
+        slid in, so the bars glide left continuously instead of jumping a whole slot each sample."""
+        x0, y0, x1, y1 = box
+        layer = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        cy = (y1 - y0) / 2
+        slot, half, r = self._u(7), self._u(1.6), self._u(1.6)
+        bx = self._u(42)
+        n = len(levels)
+        for i, v in enumerate(levels):
+            pos = (BARS - 1) - (n - 1 - i) + (1 - phase)   # phase 1 -> newest sits in the last slot
+            if pos >= BARS or pos <= -1:
+                continue
+            a = 1.0 if 0 <= pos <= BARS - 1 else (BARS - pos if pos > BARS - 1 else 1 + pos)  # fade at both ends
+            hh = self._u(3 + v * 22)
+            x = bx + pos * slot
+            d.rounded_rectangle((x - half, cy - hh / 2 + self._u(1), x + half, cy + hh / 2 + self._u(1)),
+                                radius=r, fill=(0, 70, 130, int(70 * a)))
+            d.rounded_rectangle((x - half, cy - hh / 2, x + half, cy + hh / 2),
+                                radius=r, fill=(255, 255, 255, int(245 * a)))
+        return layer
+
+    def render(self, state, label="", levels=(), t=0.0, kind="info", caption="", phase=1.0, caption_alpha=1.0):
+        """`t` is a clock in seconds: pulses, bouncing dots and bubbles move by real time, not by frames drawn."""
+        dt = 1 / 30 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.1)
+        self.last_t = t
         if state == "hidden":
             return Image.new("RGBA", self.size, (0, 0, 0, 0))
         if state == "idle":
-            box, base, over = self._glass("idle", 60, 15)
-            img = Image.alpha_composite(base, over)
-            return img.resize(self.size, Image.LANCZOS)
+            if "idle_img" not in self.cache:
+                box, base, over = self._glass("idle", 60, 15)
+                self.cache["idle_img"] = self._down(Image.alpha_composite(base, over))
+            return self.cache["idle_img"].copy()
         if state in ("recording", "locked", "command"):
             wide = state != "recording"
             w = 258 if wide else 184
             glow = (170, 120, 255) if state == "command" else (90, 230, 255)
             box, base, over = self._glass(("rec", state), w, 42, glow=glow)
             img = base.copy()
+            x0, y0, x1, y1 = box
             lv = levels[-1] if levels else 0.0
-            self.bubbles.step(box, lv)
-            layer = Image.new("RGBA", self.big, (0, 0, 0, 0))
-            self.bubbles.draw(layer)
+            self.bubbles.step(box, lv, dt)
+            layer = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+            self.bubbles.draw(layer, x0, y0)
             mkey = ("mask", state)
             if mkey not in self.cache:
-                self.cache[mkey] = capsule_mask(self.big, box, (box[3] - box[1]) // 2)
-            layer.putalpha(Image.composite(layer.getchannel("A"), Image.new("L", self.big, 0), self.cache[mkey]))
-            img.alpha_composite(layer)
-            x0, y0, x1, y1 = box
+                self.cache[mkey] = capsule_mask(self.big, box, (box[3] - box[1]) // 2).crop(box)
+            layer.putalpha(ImageChops.multiply(layer.getchannel("A"), self.cache[mkey]))
+            img.alpha_composite(layer, (x0, y0))
             cy = (y0 + y1) // 2
-            pulse = 0.5 + 0.5 * math.sin(tick / 4.5)
+            pulse = 0.5 + 0.5 * math.sin(t * 6.67)
             orb(img, x0 + self._u(22), cy, self._u(9), ORB["command" if state == "command" else "recording"], pulse)
+            img.alpha_composite(self._bars(box, list(levels), phase), (x0, y0))
             d = ImageDraw.Draw(img)
-            bx = x0 + self._u(42)
-            for i, v in enumerate(levels):
-                hh = self._u(3 + v * 22)
-                x = bx + i * self._u(7)
-                d.rounded_rectangle((x - self._u(1.6), cy - hh // 2 + self._u(1), x + self._u(1.6), cy + hh // 2 + self._u(1)),
-                                    radius=self._u(1.6), fill=(0, 70, 130, 70))
-                d.rounded_rectangle((x - self._u(1.6), cy - hh // 2, x + self._u(1.6), cy + hh // 2),
-                                    radius=self._u(1.6), fill=(255, 255, 255, 245))
             if wide:
                 tag = "Command" if state == "command" else "Hands-free"
-                tx = bx + len(levels) * self._u(7) + self._u(6)
+                tx = x0 + self._u(42) + BARS * self._u(7) + self._u(6)
                 d.text((tx + SS, cy + SS), tag, font=self.small, fill=(0, 60, 110, 120), anchor="lm")
                 d.text((tx, cy), tag, font=self.small, fill=(255, 255, 255, 250), anchor="lm")
                 orb(img, x1 - self._u(22), cy, self._u(8), ((255, 255, 255), (150, 200, 230)))
@@ -237,21 +328,21 @@ class FlowBarRenderer:
                 d.rounded_rectangle((x1 - self._u(22) - s, cy - s, x1 - self._u(22) + s, cy + s), radius=SS,
                                     fill=(20, 90, 150, 230))
             img.alpha_composite(over)
-            if caption:
-                self._caption(img, caption, y0)
-            return img.resize(self.size, Image.LANCZOS)
+            if caption and caption_alpha > 0:
+                self._caption(img, caption, y0, min(caption_alpha, 1.0))
+            return self._down(img)
         if state == "processing":
             box, base, over = self._glass("proc", 100, 36, glow=(90, 230, 255))
             img = base.copy()
             x0, y0, x1, y1 = box
             cy = (y0 + y1) // 2
             for i in range(3):
-                ph = tick / 5.0 - i * 0.9
+                ph = t * 6.0 - i * 0.9
                 dy = -abs(math.sin(ph)) * self._u(6)
                 orb(img, (x0 + x1) // 2 + (i - 1) * self._u(18), cy + self._u(2) + dy, self._u(5.5),
                     ((255, 255, 255), (120, 210, 255)))
             img.alpha_composite(over)
-            return img.resize(self.size, Image.LANCZOS)
+            return self._down(img)
         # toast
         text = label[:64]
         tw = self.font.getlength(text) / (self.scale * SS)
@@ -266,7 +357,16 @@ class FlowBarRenderer:
         d.text((tx + SS, cy + SS), text, font=self.font, fill=(0, 50, 100, 140), anchor="lm")
         d.text((tx, cy), text, font=self.font, fill=(255, 255, 255, 255), anchor="lm")
         img.alpha_composite(over)
-        return img.resize(self.size, Image.LANCZOS)
+        return self._down(img)
+
+
+def crossfade(a, b, t):
+    """Blend two RGBA frames (t: 0 = all a, 1 = all b) in premultiplied space, so edges don't go dark mid-fade."""
+    if t <= 0:
+        return a
+    if t >= 1 or a.size != b.size:
+        return b
+    return Image.blend(a.convert("RGBa"), b.convert("RGBa"), t).convert("RGBA")
 
 
 _ARABIC = re.compile("[\u0590-\u08ff\ufb1d-\ufefc]")

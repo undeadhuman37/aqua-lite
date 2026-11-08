@@ -3,6 +3,12 @@
 Headings are `## <version>` or `## <version> - <update name>`. The first line under each heading is what the app
 shows once after updating (keep it under 52 characters).
 
+## 1.3.2
+smoother Flow bar animations
+- The Flow bar now animates at 60 fps with evenly spaced frames, and draws each frame about 3x faster.
+- The waveform glides smoothly instead of jumping, and the bars no longer flicker on every sound.
+- The bar fades between states (listening, thinking, done) instead of snapping, and the live-words bubble fades in and out.
+
 ## 1.3.1
 new app icon and a "Report a problem" button
 - **New icon** that shows up properly everywhere: the installer, Start menu, Desktop, taskbar and tray.

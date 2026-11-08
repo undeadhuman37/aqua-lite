@@ -602,3 +602,20 @@ def update_layered(hwnd, x, y, w, h, bgra):
     gdi32.DeleteDC(mem)
     user32.ReleaseDC(None, screen)
     return ok
+
+
+_fine_timer = False
+
+
+def fine_timer(on):
+    """Ask Windows for 1 ms timer ticks (default is ~15.6 ms, which makes 60 fps frames land unevenly).
+    Only held while the Flow bar is animating, so it costs nothing at rest."""
+    global _fine_timer
+    if on == _fine_timer:
+        return
+    try:
+        winmm = ctypes.WinDLL("winmm")
+        (winmm.timeBeginPeriod if on else winmm.timeEndPeriod)(1)
+        _fine_timer = on
+    except OSError:
+        pass

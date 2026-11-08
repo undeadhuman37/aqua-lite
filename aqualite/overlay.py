@@ -6,11 +6,17 @@ import tkinter as tk
 
 from PIL import Image
 
-from .aero import FlowBarRenderer, premultiplied_bgra
+from .aero import BARS, FlowBarRenderer, crossfade, premultiplied_bgra
 
 IS_WIN = sys.platform == "win32"
-ANIMATED = ("recording", "locked", "command", "processing")
+LISTENING = ("recording", "locked", "command")
+ANIMATED = LISTENING + ("processing",)
 SHOW_SECS, HIDE_SECS = 0.30, 0.22   # slide up from / down under the bottom edge of the screen
+FRAME = 1 / 60                      # frame pace while anything is moving
+REST_POLL = 0.1                     # how often to look in while nothing is moving
+SAMPLE_SECS = 1 / 30                # one new waveform bar every 33 ms (the scroll speed)
+FADE_SECS = 0.16                    # cross-fade when the bar changes state (recording -> processing -> toast)
+CAPTION_SECS = 0.15                 # live-words bubble fades in / out
 
 
 def ease_out_back(t, s=1.4):
@@ -21,6 +27,10 @@ def ease_out_back(t, s=1.4):
 
 def ease_in_cubic(t):
     return t * t * t
+
+
+def ease_in_out(t):
+    return t * t * (3 - 2 * t)
 
 
 def _match(amount, up):
@@ -41,14 +51,21 @@ class FlowBar:
     def __init__(self, root, level_fn, on_click, show_idle=True):
         self.root, self.level_fn, self.on_click = root, level_fn, on_click
         self.show_idle = show_idle
-        self.state, self.label, self.kind, self.tick = "idle", "", "info", 0
+        self.state, self.label, self.kind = "idle", "", "info"
         self.caption = ""   # live words while recording
-        self.levels = collections.deque([0.0] * 14, maxlen=14)
+        self.levels = collections.deque([0.0] * (BARS + 1), maxlen=BARS + 1)
+        self.env = 0.0      # smoothed mic level: rises instantly, falls gently, so bars don't flicker
         self.toast_job = None
         self.dirty = True
+        now = time.perf_counter()
+        self.last_sample, self.phase = now, 1.0
         # slide animation: shown goes 0 (tucked under the screen edge) -> 1 (fully up)
-        self.shown, self.last_frame, self.going_up = 0.0, time.perf_counter(), False
+        self.shown, self.last_frame, self.going_up = 0.0, now, False
         self.face = ("idle", "", "info", "")   # what to draw while sliding away
+        self.face_key = None                   # (state, label, kind) last drawn, to spot changes worth a fade
+        self.last_img, self.fade_from, self.fade_t0 = None, None, 0.0
+        self.cap_alpha, self.cap_text = 0.0, ""
+        self.job, self.next_due, self.was_active, self.last_keep = None, now, False, 0.0
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
@@ -76,47 +93,103 @@ class FlowBar:
                 self.win.attributes("-transparentcolor", "#ff00fe")
                 winapi.make_overlay_window(self.win)
         self._loop()
+        self.warm = self.r.warm_steps()
+        self.root.after(400, self._warm_next)
+
+    def _warm_next(self):
+        """Build one piece of cached glass, then come back later for the next, only while the bar is resting."""
+        if not self.warm:
+            return
+        if not self.was_active:
+            try:
+                self.warm.pop(0)()
+            except Exception:
+                self.warm = []
+                return
+        try:
+            self.root.after(40, self._warm_next)
+        except tk.TclError:
+            pass
 
     # ---------------------------------------------------------------- public
     def set_caption(self, text):
         if text != self.caption:
             self.caption = text
             self.dirty = True
+            self._wake()
 
     def set_state(self, state, label=""):
-        if state not in ("recording", "locked", "command"):
+        if state in LISTENING and self.state not in LISTENING:  # fresh recording: start from a flat waveform
+            self.levels.extend([0.0] * self.levels.maxlen)
+            self.env, self.last_sample = 0.0, time.perf_counter()
+        if state not in LISTENING:
             self.caption = ""
         self.state, self.label = state, label
         self.dirty = True
         if self.toast_job:
             self.root.after_cancel(self.toast_job)
             self.toast_job = None
+        self._wake()
 
     def toast(self, text, kind="info", seconds=2.8):
         self.set_state("toast", text)
         self.kind = kind
         self.toast_job = self.root.after(int(seconds * 1000), lambda: self.set_state("idle"))
 
-    # ---------------------------------------------------------------- drawing
-    def _position(self):
-        if IS_WIN:
-            from . import winapi
-            l, _t, r, b = winapi.work_area_at_cursor()
-        else:
-            l, r, b = 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        return (l + r) // 2 - self.w // 2, b - self.h
+    # ---------------------------------------------------------------- frame loop
+    def _wake(self):
+        """Something changed while the loop was resting: draw on the next turn instead of up to 100 ms later."""
+        if self.job is not None and not self.was_active:
+            self.root.after_cancel(self.job)
+            self.job = self.root.after(1, self._loop)
 
     def _loop(self):
-        self.tick += 1
+        self.job = None
         try:
-            if self.state in ("recording", "locked", "command"):
-                self.levels.append(self.level_fn())
-            if self.dirty or self.state in ANIMATED or self._sliding() or self.tick % 30 == 0:
-                self._draw()
+            now = time.perf_counter()
+            self._sample(now)
+            if self.dirty or self._active() or now - self.last_keep >= 1.0:
+                self._draw(now)
                 self.dirty = False
+            self._schedule(self._active())
         except tk.TclError:
             return
-        self.root.after(33, self._loop)
+
+    def _schedule(self, active):
+        now = time.perf_counter()
+        if active:
+            # pace frames against a running deadline, so a slow frame doesn't push every later one back
+            self.next_due = self.next_due + FRAME if self.was_active else now + FRAME
+            if self.next_due < now:  # fell well behind (busy PC): skip ahead rather than rush to catch up
+                self.next_due = now + 0.001
+            delay = self.next_due - now
+        else:
+            delay = REST_POLL
+        if IS_WIN and active != self.was_active:
+            from . import winapi
+            winapi.fine_timer(active)
+        self.was_active = active
+        self.job = self.root.after(max(1, int(delay * 1000)), self._loop)
+
+    def _sample(self, now):
+        """Read the mic level at a steady 30 per second, whatever the frame rate, and note how far between
+        samples we are (phase) so the waveform can glide."""
+        if self.state not in LISTENING:
+            self.last_sample, self.phase = now, 1.0
+            return
+        if now - self.last_sample > 0.25:  # long gap (PC was busy): don't flood in stale samples
+            self.last_sample = now - SAMPLE_SECS
+        while now - self.last_sample >= SAMPLE_SECS:
+            self.last_sample += SAMPLE_SECS
+            raw = max(0.0, min(1.0, float(self.level_fn() or 0.0)))
+            self.env = raw if raw > self.env else self.env + (raw - self.env) * 0.45
+            self.levels.append(self.env)
+        self.phase = min(1.0, (now - self.last_sample) / SAMPLE_SECS)
+
+    def _active(self):
+        cap_target = 1.0 if (self.state in LISTENING and self.caption) else 0.0
+        return (self.state in ANIMATED or self._sliding() or self.fade_from is not None
+                or self.cap_alpha != cap_target)
 
     def _visible(self):
         return not (self.state == "idle" and not self.show_idle)
@@ -124,12 +197,8 @@ class FlowBar:
     def _sliding(self):
         return self.shown != (1.0 if self._visible() else 0.0)
 
-    def _slide_offset(self):
+    def _slide_offset(self, dt):
         """Advance the slide; returns how many pixels to push the bar down (0 = fully shown)."""
-        now = time.perf_counter()
-        dt, self.last_frame = min(now - self.last_frame, 0.1), now
-        if self.shown in (0.0, 1.0):  # starting from rest: the last frame may have been long ago
-            dt = min(dt, 0.034)
         up = self._visible()
         if up != self.going_up:  # changed direction mid-slide: continue from where the bar is, no jump
             self.shown = _match(self._amount(self.going_up, self.shown), up)
@@ -144,26 +213,58 @@ class FlowBar:
     def _amount(up, shown):
         return ease_out_back(shown) if up else 1 - ease_in_cubic(1 - shown)
 
-    def _draw(self):
+    # ---------------------------------------------------------------- drawing
+    def _draw(self, now):
+        dt, self.last_frame = min(now - self.last_frame, 0.1), now
+        if self.shown in (0.0, 1.0):  # starting from rest: the last frame may have been long ago
+            dt = min(dt, FRAME * 1.25)
         if self._visible():
             self.face = (self.state, self.label, self.kind, self.caption)
-        offset = self._slide_offset()
+            key = self.face[:3]
+            if key != self.face_key:
+                if self.face_key is not None and self.last_img is not None and self.shown > 0:
+                    self.fade_from, self.fade_t0 = self.last_img, now
+                self.face_key = key
+        offset = self._slide_offset(dt)
         if not self._visible() and self.shown == 0.0:
             img = self.r.render("hidden")
+            self.last_img = self.fade_from = None
+            self.cap_alpha, self.face_key = 0.0, None
         else:
             state, label, kind, caption = self.face
-            img = self.r.render(state, label, list(self.levels), self.tick, kind, caption)
+            # live-words bubble: fade in when words arrive, fade out (with the last words) when they stop
+            if state in LISTENING:
+                target = 1.0 if caption else 0.0
+                if caption:
+                    self.cap_text = caption
+                step = dt / CAPTION_SECS
+                self.cap_alpha = min(target, self.cap_alpha + step) if target > self.cap_alpha \
+                    else max(target, self.cap_alpha - step)
+            else:
+                self.cap_alpha, self.cap_text = 0.0, ""
+            img = self.r.render(state, label, list(self.levels), now, kind,
+                                self.cap_text if self.cap_alpha > 0 else "", self.phase, ease_in_out(self.cap_alpha))
+            if self.fade_from is not None:
+                p = (now - self.fade_t0) / FADE_SECS
+                if p >= 1:
+                    self.fade_from = None
+                else:
+                    img = crossfade(self.fade_from, img, ease_in_out(max(0.0, p)))
+            self.last_img = img
             if offset:  # slide: shift the picture down; whatever falls off the bottom is cut, so it tucks under the edge
                 moved = Image.new("RGBA", img.size, (0, 0, 0, 0))
                 moved.paste(img, (0, offset))
                 img = moved
         x, y = self._position()
+        keep = now - self.last_keep >= 1.0
+        if keep:
+            self.last_keep = now
         if self.layered:
             from . import winapi
             if winapi.user32.IsIconic(self.hwnd):  # something minimized us (e.g. Win+D): come back quietly
                 winapi.user32.ShowWindow(self.hwnd, 4)
             winapi.update_layered(self.hwnd, x, y, self.w, self.h, premultiplied_bgra(img))
-            if self.tick % 30 == 0:
+            if keep:
                 winapi.user32.SetWindowPos(self.hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
             return
         # fallback / non-Windows: composite over the key colour (hard edges) and show in the canvas
@@ -175,3 +276,11 @@ class FlowBar:
         self.c.delete("all")
         self.c.create_image(0, 0, image=self.photo, anchor="nw")
         self.win.geometry(f"+{x}+{y}")
+
+    def _position(self):
+        if IS_WIN:
+            from . import winapi
+            l, _t, r, b = winapi.work_area_at_cursor()
+        else:
+            l, r, b = 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        return (l + r) // 2 - self.w // 2, b - self.h
