@@ -48,6 +48,18 @@ class PreviewModel:
         return " ".join(s.text.strip() for s in segs).strip()
 
 
+    def words(self, audio, cfg, prompt=""):
+        """Words with their timings [(text, start, end), ...] (seconds into `audio`), for instant text.
+        Silence is skipped with the VAD that ships inside faster-whisper, so pauses don't turn into
+        Whisper's made-up 'Thank you.'"""
+        model = self.load(cfg.get("live_preview_model", "base"))
+        lang = None if cfg.get("language", "auto") == "auto" else cfg["language"]
+        segs, _ = model.transcribe(audio, language=lang, beam_size=1, word_timestamps=True,
+                                   vad_filter=True, vad_parameters={"min_silence_duration_ms": 400},
+                                   condition_on_previous_text=False, initial_prompt=prompt or None)
+        return [(w.word, float(w.start), float(w.end)) for s in segs for w in (s.words or [])]
+
+
 PREVIEW = PreviewModel()
 
 

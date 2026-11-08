@@ -212,7 +212,8 @@ class SettingsWindow:
         self.lang = _pair_combo(f, LANGS, self.cfg.get("language", "auto"), width=22)
         self._row(f, r, "Language", self.lang, "Auto handles Arabic, English and mixing")
         r += 1
-        for key, label in (("live_preview", "Show my words in the bar while I talk"),
+        for key, label in (("instant_text", "Instant text: type my words while I talk (polished when I let go)"),
+                           ("live_preview", "Show my words in the bar while I talk"),
                            ("learn_corrections", "Learn words I correct right after dictating"),
                            ("voice_enter", 'Say "press enter" or "send it" at the end to press Enter'),
                            ("double_tap_handsfree", "Tap the shortcut twice for hands-free"),

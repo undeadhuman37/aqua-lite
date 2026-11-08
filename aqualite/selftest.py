@@ -250,6 +250,31 @@ def check_learning():
     assert stt.vocab_prompt({"dictionary": ["Patricio"]}, ["patricio", "Huilin"]) == "Patricio, Huilin."
 
 
+def check_instant():
+    from . import instant
+    a = instant.Agreement()
+    w = lambda t, s: (" " + t, s, s + 0.3)
+    assert a.insert([w("Hey", 0.1), w("Patrisio", 0.5)]) == []                     # first pass: nothing is sure yet
+    assert [x[0] for x in a.insert([w("hey", 0.1), w("Patricio", 0.5), w("the", 0.9)])] == [" hey"]
+    assert [x[0] for x in a.insert([w("Hey", 0.1), w("Patricio,", 0.5), w("the", 0.9)])] == [" Patricio,", " the"]
+    assert a.insert([w("the", 0.92), w("samples", 1.3)]) == []                     # re-heard 'the' isn't doubled
+    assert [x[0] for x in a.insert([w("samples", 1.31), w("arrived", 1.7)])] == [" samples"]
+    assert a.text() == "hey Patricio, the samples"
+    assert instant.join_words([(" Hello", 0, 1), ("world.", 1, 2)], first=False) == " Hello world."
+    assert instant.presses("caf\u00e9") == 4 and instant.presses("cafe\u0301") == 4 and instant.presses("") == 0
+    ok = instant.safe_to_replace
+    assert ok("see you", "Hi, see you", True, False) and ok("hello there", "Hello there", True, False)
+    assert ok("a b", "x a\u00a0b", True, False) and not ok("see you", "see you!", True, False)
+    assert not ok("see you", "see yo", True, False) and ok("x", None, False, False) and not ok("x", None, False, True)
+    t, ev = [0.0], []
+    m = hotkeys.HotkeyMachine({}, lambda n, c: ev.append(n), clock=lambda: t[0])
+    m.on_key(0xA2, True), m.on_key(0x5B, True)
+    t[0] = 1.0
+    assert m.release_held() == {0xA2, 0x5B} and m.on_key(0x5B, True) is True       # repeats swallowed
+    assert m.on_key(0x5B, False) is True and "stop" in ev and m.on_key(0xA2, False) is True
+    assert m.on_key(0xA2, True) is False and m.released_mods == set()               # next press is normal again
+
+
 def check_report():
     from . import report
     r = report.redact
@@ -275,7 +300,8 @@ def main():
     for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
-                     ("learning & screen context", check_learning), ("problem report", check_report)):
+                     ("learning & screen context", check_learning), ("instant text", check_instant),
+                     ("problem report", check_report)):
         fn()
         print(f"ok  {name}")
     if sys.platform == "win32":

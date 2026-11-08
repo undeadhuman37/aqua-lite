@@ -114,6 +114,8 @@ DEFAULTS = {
     "handsfree_silence_secs": 8,         # hands-free finishes after this much silence (0 = never)
     "voice_enter": True,                 # end with "press enter" / "send it" to press Enter after typing
     "live_preview": True,                # show your words in the bar while you talk
+    "instant_text": True,                # type your words into the app while you talk, polished when you let go
+    "instant_text_skip_apps": [],        # process names to always insert at the end instead (code editors already are)
     "live_preview_model": "base",        # small fast offline model used only for the preview
     "learn_corrections": True,           # add words you fix right after dictating to the dictionary
     "learn_style": True,                 # remember how you reword dictations (kept on this PC) and show the AI

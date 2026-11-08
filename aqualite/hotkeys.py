@@ -53,6 +53,9 @@ class HotkeyMachine:
         self.clock = clock
         self.pressed_at = 0.0
         self.last_tap = -10.0
+        # held shortcut keys that Windows was told are already up (so instant text can type while you hold
+        # them): their auto-repeat and their real release are swallowed so Windows never sees them again
+        self.released_mods = set()
         self.configure(cfg)
 
     def configure(self, cfg):
@@ -83,7 +86,15 @@ class HotkeyMachine:
             return False
         return self._down(vk, repeat) if is_down else self._up(vk)
 
+    def release_held(self):
+        """Mark the shortcut keys held right now as released-to-Windows; returns them (to send their key-ups)."""
+        held = set(self.down & self.ptt_vks) if self.recording else set()
+        self.released_mods = self.released_mods | held
+        return held
+
     def _down(self, vk, repeat):
+        if vk in self.released_mods:  # still held after we told Windows it's up: keep it that way
+            return True
         if repeat:  # auto-repeat: keep swallowing what we swallowed the first time
             return self.recording and (vk in self.hf or (vk in self.ptt_vks and vk not in MODIFIER_VKS))
         if not self.recording:
@@ -100,6 +111,7 @@ class HotkeyMachine:
                 now = self.clock()
                 double = self.double_tap and now - self.last_tap < self.DOUBLE_TAP_SECS
                 self.recording, self.locked = True, False
+                self.released_mods = set()
                 self.command = bool(self.down & self.cmd)
                 self.pressed_at, self.last_tap = now, -10.0
                 self.emit("start", self.command)
@@ -146,10 +158,12 @@ class HotkeyMachine:
         return False
 
     def _up(self, vk):
+        swallow = vk in self.released_mods   # Windows already got this key's release from us
+        self.released_mods.discard(vk)
         if self.recording and not self.locked and vk in self.ptt_vks and not self._held(self.ptt):
             self.recording = False
             now = self.clock()
             self.last_tap = now if now - self.pressed_at < self.TAP_SECS else -10.0
             self.emit("stop", self.command)
-            return vk not in MODIFIER_VKS
-        return False
+            return swallow or vk not in MODIFIER_VKS
+        return swallow

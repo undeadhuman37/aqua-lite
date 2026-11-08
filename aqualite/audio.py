@@ -52,6 +52,7 @@ class Recorder:
     def __init__(self):
         self.stream = None
         self.chunks = []
+        self.total = 0            # samples recorded so far (at self.rate)
         self.rate = RATE
         self.level = 0.0          # 0..1 for the Flow bar waveform
         self.speech_frames = 0
@@ -62,6 +63,7 @@ class Recorder:
     def _cb(self, data, frames, _t, _status):
         mono = data[:, 0].copy()
         self.chunks.append(mono)
+        self.total += len(mono)
         rms = float(np.sqrt(np.mean(mono ** 2))) if len(mono) else 0.0
         if rms > SPEECH_RMS:
             self.speech_frames += frames
@@ -73,7 +75,7 @@ class Recorder:
         import sounddevice as sd
         with self.lock:
             self.stop_stream()
-            self.chunks, self.speech_frames, self.level = [], 0, 0.0
+            self.chunks, self.speech_frames, self.level, self.total = [], 0, 0.0, 0
             dev = _device_index(device_name)
             try:
                 self.rate = RATE
@@ -116,6 +118,28 @@ class Recorder:
             if got >= need:
                 break
         audio = np.concatenate(take[::-1])[-need:]
+        return resample(audio, self.rate)
+
+    @property
+    def duration(self):
+        """Seconds recorded so far."""
+        return self.total / max(self.rate, 1)
+
+    def audio_from(self, start_secs):
+        """Audio from `start_secs` into the recording up to now, at 16 kHz, without stopping (for instant text).
+        Walks back from the newest chunk, so it stays cheap even deep into a long hands-free session."""
+        chunks = list(self.chunks)
+        total = sum(map(len, chunks))   # from the same snapshot, so timings line up exactly
+        want = total - int(max(0.0, start_secs) * self.rate)
+        if want <= 0 or not chunks:
+            return np.zeros(0, np.float32)
+        got, take = 0, []
+        for c in reversed(chunks):
+            take.append(c)
+            got += len(c)
+            if got >= want:
+                break
+        audio = np.concatenate(take[::-1])[-want:]
         return resample(audio, self.rate)
 
     @property

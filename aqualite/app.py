@@ -7,7 +7,8 @@ import threading
 import time
 import tkinter as tk
 
-from . import audio, config, context, deps, history, hotkeys, learn, live, llm, music, report, sounds, stt, textproc, updater
+from . import (audio, config, context, deps, history, hotkeys, instant, learn, live, llm, music, report, sounds, stt,
+               textproc, updater)
 from .overlay import FlowBar
 
 IS_WIN = sys.platform == "win32"
@@ -35,16 +36,23 @@ class App:
         self.icon_path = os.path.join(HERE, "assets", "aqualite.ico")
 
         if IS_WIN:
+            winapi.set_app_id()   # our own taskbar identity, so Windows shows our logo instead of Python's
             winapi.set_dpi_aware()
             self.cfg["launch_at_startup"] = os.path.exists(winapi.startup_shortcut_path())
         self.root = tk.Tk()
         self.root.withdraw()
         self.root.title("Aqua Lite")
+        try:  # every window we open (Settings, History, dialogs) gets the Aqua Lite logo
+            self.root.iconbitmap(default=self.icon_path)
+        except tk.TclError as e:
+            log.info("window icon not set: %s", e)
         self.bar = FlowBar(self.root, lambda: self.recorder.level, self._bar_clicked, self.cfg.get("show_idle_bar", False))
         self.live = live.LiveCaption(self.recorder, self.cfg, lambda text: self.post("caption", text))
         self.learner = learn.Learner(lambda words: self.post("learned", words), on_edited=self._edited)
         self.edit_where = ("", "other")   # app + category of the dictation being watched for edits
         self.grab = None                  # screen context being read for the current recording
+        self.instant = None               # instant text: (streamer, (hwnd, proc, title, pid)) while typing live
+        self.user_typed = False           # keys pressed by the user while instant text was typing
 
         self.tray = None
         try:
@@ -56,7 +64,7 @@ class App:
 
         self.hook = None
         if IS_WIN:
-            self.hook = winapi.KeyboardHook(self.machine.on_key)
+            self.hook = winapi.KeyboardHook(self._on_key)
             self.hook.start()
             self.hook.ok.wait(3)
             if self.hook.error:
@@ -98,6 +106,12 @@ class App:
     def post(self, name, *args):
         self.events.put((name, args))
 
+    def _on_key(self, vk, is_down):  # runs on the hook thread: must be quick
+        swallowed = self.machine.on_key(vk, is_down)
+        if is_down and not swallowed and self.instant is not None and vk not in hotkeys.MODIFIER_VKS:
+            self.user_typed = True   # they typed while words were going in live: don't trust the box blindly
+        return swallowed
+
     def _on_hotkey(self, name, command):  # runs on the hook thread: must be quick
         if name == "mask" and IS_WIN:
             threading.Thread(target=winapi.send_mask, daemon=True).start()
@@ -128,7 +142,7 @@ class App:
     def _preload(self):
         if stt.resolve_engine(self.cfg) == "local":
             threading.Thread(target=self._safe_load, daemon=True).start()
-        if self.cfg.get("live_preview", True) and live.PREVIEW.model is None:
+        if (self.cfg.get("live_preview", True) or self.cfg.get("instant_text", True)) and live.PREVIEW.model is None:
             live.PREVIEW.preload(self.cfg)
 
     def _safe_load(self):
@@ -157,7 +171,11 @@ class App:
             except Exception as e:
                 log.info("context: not started: %s", e)
         self.bar.set_state("command" if command else "recording")
-        self.live.start()
+        self.instant, self.user_typed = None, False
+        if not command:
+            self._start_instant()
+        if self.instant is None:
+            self.live.start()
         self.learner.stop()
         self._sound("start")
         self._music(True)
@@ -166,6 +184,92 @@ class App:
     def ev_hk_command(self, _command):
         self.rec_command = True
         self.bar.set_state("command")
+        self._drop_instant()  # it's an instruction now, not text: take back anything typed live
+
+    # ------------------------------------------------------------------ instant text
+    def _start_instant(self):
+        """Type words into the focused app while the user talks (see instant.py)."""
+        cfg = self.cfg
+        if not (IS_WIN and cfg.get("instant_text", True)) or live.PREVIEW.failed:
+            return
+        if live.PREVIEW.model is None:  # still loading (or downloading the first time): not this time
+            if not live.PREVIEW.lock.locked():
+                live.PREVIEW.preload(cfg)
+            return
+        try:
+            proc, title, pid = winapi.foreground()
+            hwnd = winapi.user32.GetForegroundWindow()
+            p = proc.lower()
+            if (textproc.app_category(proc, title) == "code" or p in textproc.TERMINALS
+                    or p in context.ALWAYS_BLOCKED or p in {a.lower() for a in cfg.get("instant_text_skip_apps", [])}):
+                return  # editors auto-complete and auto-close brackets while you type: insert at the end there
+            if winapi.process_elevated(pid) and not winapi.self_elevated():
+                return  # Windows blocks typing into admin windows
+        except Exception as e:
+            log.info("instant text: not started: %s", e)
+            return
+
+        def before_first():  # Ctrl+Win may still be held: let Windows think they're up, or letters become shortcuts
+            held = self.machine.release_held()
+            if held:
+                winapi.release_keys(sorted(held))
+                time.sleep(0.03)
+
+        def type_here(text):  # only ever into the window the dictation started in
+            return winapi.user32.GetForegroundWindow() == hwnd and winapi.type_text(text)
+
+        st = instant.Streamer(self.recorder, cfg, live.PREVIEW, type_here, before_first,
+                              on_caption=lambda text: self.post("caption", text),
+                              allow=lambda: not instant.is_password_box())
+        self.instant = (st, (hwnd, proc, title, pid))
+        st.start()
+
+    def _take_instant(self):
+        """Stop live typing now (main thread, doesn't wait). Returns what the worker needs to finish up."""
+        if self.instant is None:
+            return None
+        st, where = self.instant
+        self.instant = None
+        st.stop_event.set()
+        return st, where, self.user_typed
+
+    def _drop_instant(self):
+        live_info = self._take_instant()
+        if live_info:
+            self.jobs.put(("discard_live", live_info))
+
+    def _swap_live(self, live_info, final, target=None, saved=None):
+        """Replace the words typed live with `final` ("" = just remove them). Returns the paste result, or None if
+        nothing was typed live (then the caller pastes as usual)."""
+        st, (hwnd, proc, _title, _pid), user_typed = live_info
+        typed = st.finish()
+        if not typed:
+            return None
+        cfg = self.cfg
+        winapi.wait_modifiers_released()
+        if winapi.user32.GetForegroundWindow() != hwnd:
+            ok = False
+            log.info("instant text: window changed, not touching it")
+        else:
+            before, exact = instant.text_before_caret(len(typed))
+            ok = instant.safe_to_replace(typed, before, exact, user_typed)
+            if not ok:
+                log.info("instant text: live text changed (readable=%s), not touching it", before is not None)
+        if not ok:
+            if final.strip():
+                winapi.set_text(final, private=True)
+                self.post("toast", "Your live words were changed - polished text copied, press Ctrl+V", "warn", 5)
+            return {"proc": proc, "keys": "none", "status": "kept"}
+        winapi.select_left(instant.presses(typed))
+        time.sleep(0.03)
+        if final.strip():
+            res = winapi.paste(final, cfg, target=target, saved=saved)
+        else:
+            winapi.tap_key("delete")
+            res = {"proc": proc, "keys": "delete", "status": "ok"}
+        res["live"] = True
+        log.info("instant text: swapped %d live chars for %d polished", len(typed), len(final))
+        return res
 
     def ev_hk_lock(self, command):
         self.bar.set_state("command" if (command or self.rec_command) else "locked")
@@ -176,6 +280,7 @@ class App:
             self.bar.set_caption(text)
 
     def ev_hk_cancel(self, _command):
+        self._drop_instant()
         self.live.stop()
         self._music(False)
         if self.recorder.active:
@@ -187,6 +292,7 @@ class App:
     def ev_hk_stop(self, command):
         if not self.recorder.active:
             return
+        live_info = self._take_instant()
         self.live.stop()
         self._music(False)
         pcm, speech = self.recorder.stop()
@@ -194,12 +300,14 @@ class App:
         self.rec_started = 0
         self._tray("idle")
         if len(pcm) < audio.RATE * 0.3:  # a tap, not a dictation
+            if live_info:
+                self.jobs.put(("discard_live", live_info))
             self.bar.set_state("idle")
             return
         self._sound("stop")
         self.bar.set_state("processing")
         self._tray("processing")
-        self.jobs.put(("dictate", pcm, speech, mode))
+        self.jobs.put(("dictate", pcm, speech, mode, live_info))
 
     def ev_hk_paste_last(self, _command):
         self.jobs.put(("paste_last",))
@@ -390,6 +498,9 @@ class App:
                         self.post("toast", "Nothing dictated yet", "warn")
                 elif job[0] == "undo_last":
                     self._undo_last()
+                elif job[0] == "discard_live":
+                    if IS_WIN:
+                        self._swap_live(job[1], "")
             except stt.STTError as e:
                 log.error("stt: %s", e)
                 self.post("toast", f"Transcription failed: {str(e)[:70]}", "error", 5)
@@ -415,7 +526,18 @@ class App:
             self.post("toast", f"Go back to {li['proc']} to undo the last dictation", "warn")
             return
         self.learner.stop()
-        how = winapi.undo_insert(li["text"], li["proc"]) if IS_WIN else "demo"
+        how = None
+        if IS_WIN and li.get("live"):
+            # it replaced live words, so Ctrl+Z would bring those back: select exactly what was pasted instead
+            winapi.wait_modifiers_released()
+            text = li["text"].replace("\r\n", "\n")
+            before, exact = instant.text_before_caret(len(text))
+            if before is not None and instant.safe_to_replace(text, before, exact, False):
+                winapi.select_left(instant.presses(text))
+                winapi.tap_key("delete")
+                how = "select+delete"
+        if how is None:
+            how = winapi.undo_insert(li["text"], li["proc"]) if IS_WIN else "demo"
         self.last_insert = None
         log.info("undo last dictation (%s)", how)
         self.post("toast", "Removed the last dictation", "ok")
@@ -427,11 +549,17 @@ class App:
             proc, title, pid = "demo", "", 0
         return {"app": proc, "title": title, "pid": pid, "category": textproc.app_category(proc, title)}, (proc, title, pid)
 
-    def _dictate(self, pcm, speech_secs, mode):
+    def _dictate(self, pcm, speech_secs, mode, live_info=None):
         cfg = self.cfg
         t0 = time.perf_counter()
         seconds = len(pcm) / audio.RATE
+        if live_info and (mode == "command" or not IS_WIN):
+            if IS_WIN:
+                self._swap_live(live_info, "")
+            live_info = None
         if speech_secs < 0.12:
+            if live_info:
+                self._swap_live(live_info, "")
             self.post("toast", "Didn't catch that - no speech heard", "warn")
             return
         if cfg.get("whisper_boost", True):
@@ -442,6 +570,8 @@ class App:
         if stt.is_hallucination(raw, speech_secs):
             raw = ""
         if not raw.strip():
+            if live_info:
+                self._swap_live(live_info, "")
             self.post("toast", "Didn't catch that", "warn")
             history.add(app="", title="", mode=mode, raw="", final="", seconds=seconds, words=0,
                         engine=engine, latency=time.perf_counter() - t0, status="empty")
@@ -450,6 +580,8 @@ class App:
         if mode == "dictation" and cfg.get("voice_enter", True):
             raw, enter = textproc.split_enter_command(raw)
             if enter and not raw.strip():  # just "press enter"
+                if live_info:
+                    self._swap_live(live_info, "")
                 if IS_WIN:
                     winapi.press_enter()
                 self.post("bar", "idle")
@@ -475,15 +607,20 @@ class App:
                 final += " "
         latency = time.perf_counter() - t0
         result = {"status": "demo"}
-        if final.strip() and IS_WIN:
+        swapped = self._swap_live(live_info, final, target, saved) if (live_info and IS_WIN) else None
+        if swapped is not None:  # instant text: the live words were replaced with the polished version
+            result = swapped
+            status = result["status"]
+        elif final.strip() and IS_WIN:
             result = winapi.paste(final, cfg, target=target, saved=saved)
             status = result["status"]
+        if final.strip() and IS_WIN:
             if status == "ok":
                 if enter:
                     time.sleep(textproc.enter_delay(target[0]))
                     winapi.press_enter()
                 self.last_insert = {"text": final, "proc": target[0], "pid": target[2], "time": time.time(),
-                                    "sent": enter, "mode": mode}
+                                    "sent": enter, "mode": mode, "live": bool(result.get("live"))}
                 if mode == "dictation" and not enter and (cfg.get("learn_corrections", True)
                                                           or cfg.get("learn_style", True)):
                     self.edit_where = (ctx["app"], ctx["category"])

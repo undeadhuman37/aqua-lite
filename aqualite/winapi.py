@@ -93,7 +93,7 @@ class INPUT(ctypes.Structure):
 _proto(user32.SendInput, W.UINT, W.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
 
 VK = {"ctrl": 0x11, "shift": 0x10, "alt": 0x12, "v": 0x56, "c": 0x43, "z": 0x5A, "insert": 0x2D,
-      "enter": 0x0D, "backspace": 0x08}
+      "enter": 0x0D, "backspace": 0x08, "left": 0x25, "delete": 0x2E}
 EXTENDED = {0x2D, 0x2E, 0x24, 0x23, 0x21, 0x22, 0x25, 0x26, 0x27, 0x28, 0xA3, 0xA5, 0x5B, 0x5C}
 MASK_VK = 0xE8  # unassigned VK: an "intervening key" so Win/Alt release doesn't open Start / the menu bar
 
@@ -136,6 +136,47 @@ def tap_key(name, times=1):
         user32.SendInput(2 * n, arr, ctypes.sizeof(INPUT))
         left -= n
         time.sleep(0.01)
+
+
+def type_text(text):
+    """Type text as Unicode characters (no clipboard, any keyboard layout), in small batches.
+    Returns False if Windows refused the input (e.g. an admin window)."""
+    units = text.encode("utf-16-le")
+    codes = [int.from_bytes(units[i:i + 2], "little") for i in range(0, len(units), 2)]
+    for start in range(0, len(codes), 40):
+        batch = codes[start:start + 40]
+        arr = (INPUT * (2 * len(batch)))()
+        for i, code in enumerate(batch):
+            for j, flags in ((0, 0x4), (1, 0x4 | 0x2)):   # KEYEVENTF_UNICODE (+ KEYUP)
+                arr[2 * i + j].type = 1
+                arr[2 * i + j].ki = KEYBDINPUT(0, code, flags, 0, MAGIC)
+        if user32.SendInput(len(arr), arr, ctypes.sizeof(INPUT)) != len(arr):
+            return False
+    return True
+
+
+def select_left(count):
+    """Shift+Left `count` times: selects that many characters before the cursor."""
+    if count <= 0:
+        return True
+    ok = _send([VK["shift"]], False)
+    try:
+        tap_key("left", count)
+    finally:
+        _send([VK["shift"]], True)
+    return ok
+
+
+def release_keys(vks):
+    """Tell Windows these held keys are up (they stay physically held). Used so instant text can type while
+    you hold Ctrl+Win: otherwise every letter would arrive as Ctrl+letter. Win/Alt get an intervening key
+    first, so the Start menu doesn't open."""
+    vks = [vk for vk in vks if vk]
+    if not vks:
+        return
+    if any(vk in (0x12, 0xA4, 0xA5, 0x5B, 0x5C) for vk in vks):
+        send_mask()
+    _send(vks, True)
 
 
 def press_enter():
@@ -465,6 +506,21 @@ def make_overlay_window(tk_window):
     user32.SetWindowLongPtrW(hwnd, -20, ex | 0x08000000 | 0x00000080 | 0x00000008)
     user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0020)  # TOPMOST, no move/size/activate
     return hwnd
+
+
+APP_ID = "AquaLite.Dictation"
+
+
+def set_app_id(app_id=APP_ID):
+    """Give Aqua Lite its own identity in Windows. Without it, Windows files our windows under pythonw.exe, so the
+    taskbar and Alt+Tab show Python's logo instead of ours. Must run before the first window is created."""
+    try:
+        shell32 = ctypes.WinDLL("shell32")
+        shell32.SetCurrentProcessExplicitAppUserModelID.argtypes = [W.LPCWSTR]
+        shell32.SetCurrentProcessExplicitAppUserModelID.restype = ctypes.c_long
+        return shell32.SetCurrentProcessExplicitAppUserModelID(app_id) == 0
+    except (OSError, AttributeError):
+        return False
 
 
 def set_dpi_aware():
