@@ -331,6 +331,8 @@ def check_private_mode():
                                         {"name": "llama-b1-bin-win-cpu-x64.zip", "browser_download_url": "p"}]}
     assert localai.find_engine_asset(rel, "vulkan") == ("llama-b1-bin-win-vulkan-x64.zip", "v", 5, "ab")
     assert localai.find_engine_asset(rel, "cpu")[1] == "p"
+    still_uploading = {"tag_name": "b2", "assets": [{"name": "llama-b2-bin-macos-arm64.zip", "browser_download_url": "m"}]}
+    assert localai.pick_release([still_uploading, rel], "vulkan")[1] == "v"           # newest complete release
     sib = {"siblings": [{"rfilename": "x-UD-Q4_K_XL.gguf"}, {"rfilename": "x-Q4_K_M.gguf", "lfs": {"sha256": "s", "size": 7}},
                         {"rfilename": "mmproj-x-Q4_K_M.gguf"}, {"rfilename": "x-Q8_0.gguf"}]}
     assert localai.find_model_file(sib, "Q4_K_M") == ("x-Q4_K_M.gguf", 7, "s")

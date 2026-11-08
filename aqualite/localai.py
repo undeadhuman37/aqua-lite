@@ -24,7 +24,7 @@ import requests
 log = logging.getLogger("aqualite")
 IS_WIN = sys.platform == "win32"
 
-RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10"
 ENGINES = {"vulkan": "-bin-win-vulkan-x64.zip", "cpu": "-bin-win-cpu-x64.zip"}
 
 # Small open models, all Apache 2.0. Each lists a few GGUF repos to try, newest-trusted first; the exact file is
@@ -125,6 +125,21 @@ def download(url, dest, size=None, sha256=None, progress=None, cancel=None):
     return dest
 
 
+def pick_release(releases, variant):
+    """llama.cpp publishes several builds a day, and the newest is often still uploading its files: take the newest
+    release that already has the Windows build we need. Returns (name, url, size, sha256 or None)."""
+    if isinstance(releases, dict):
+        releases = [releases]
+    for rel in releases:
+        if rel.get("draft") or rel.get("prerelease"):
+            continue
+        try:
+            return find_engine_asset(rel, variant)
+        except LocalAIError:
+            continue
+    raise LocalAIError(f"no finished Windows {variant} build in llama.cpp's recent releases, try again in a while")
+
+
 def find_engine_asset(release, variant):
     """The Windows zip for `variant` in a GitHub release listing: (name, url, size, sha256 or None)."""
     suffix = ENGINES[variant]
@@ -165,7 +180,7 @@ def install(model_key, progress=None, cancel=None, variant="vulkan"):
         r = requests.get(RELEASES, headers={**UA, "Accept": "application/vnd.github+json"}, timeout=20)
         if r.status_code != 200:
             raise LocalAIError(f"couldn't reach GitHub ({r.status_code})")
-        name, url, size, sha = find_engine_asset(r.json(), variant)
+        name, url, size, sha = pick_release(r.json(), variant)
         zpath = os.path.join(base_dir(), name)
         download(url, zpath, size, sha, lambda d, t: say("Downloading the AI engine...", d, t), cancel)
         target = os.path.join(base_dir(), "engine-" + variant)

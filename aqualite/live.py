@@ -90,31 +90,50 @@ class InstantModel(PreviewModel):
         threading.Thread(target=run, daemon=True, name="instant-load").start()
 
     def choose(self, cfg):
+        """Be ready fast: start on "base" (small, and normally already downloaded for live words), then switch to
+        "small" in the background only if it's already on this PC and quick enough. Never waits on a download."""
         want = cfg.get("instant_text_model", "auto")
         if want != "auto":
             self.load(want)
             return
+        self.load("base")
+        self.loading = False          # instant text can start now
+        if not downloaded("small"):
+            log.info("instant text: using base (small isn't downloaded)")
+            return
         try:
-            self.load("small")
-            secs = self.bench()
+            from faster_whisper import WhisperModel
+            better = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=self.threads)
+            secs = self.bench(better)
             log.info("instant text: small model takes %.2fs a pass here", secs)
             if secs <= self.FAST_ENOUGH:
-                return
+                with self.lock:
+                    self.model, self.name = better, "small"
+                log.info("instant text: switched to small")
         except Exception as e:
-            log.info("instant text: small model unavailable (%s)", e)
-        self.load("base")
+            log.info("instant text: staying on base (%s)", e)
 
-    def bench(self):
+    def bench(self, model):
         """Median time of a pass over 5 s of quiet noise (the encoder dominates, so it's a fair speed check)."""
         audio = (np.random.RandomState(0).randn(RATE * 5) * 0.01).astype(np.float32)
         times = []
         for _ in range(3):
             t0 = time.perf_counter()
-            segs, _ = self.model.transcribe(audio, language="en", beam_size=1, word_timestamps=True,
-                                            vad_filter=False, condition_on_previous_text=False)
+            segs, _ = model.transcribe(audio, language="en", beam_size=1, word_timestamps=True,
+                                       vad_filter=False, condition_on_previous_text=False)
             list(segs)
             times.append(time.perf_counter() - t0)
         return statistics.median(times)
+
+
+def downloaded(name):
+    """Is this Whisper model already on the PC? (Checks the local cache only, never downloads.)"""
+    try:
+        from faster_whisper.utils import download_model
+        download_model(name, local_files_only=True)
+        return True
+    except Exception:
+        return False
 
 
 PREVIEW = PreviewModel()
