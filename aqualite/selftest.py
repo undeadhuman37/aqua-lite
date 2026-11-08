@@ -275,6 +275,28 @@ def check_instant():
     assert m.on_key(0xA2, True) is False and m.released_mods == set()               # next press is normal again
 
 
+def check_voice_edit():
+    from . import edits
+    pa = edits.parse_answer
+    assert pa('```json\n{"type": "edit", "edits": [{"old": "Friday", "new": "Thursday"}]}\n```') == \
+        {"type": "edit", "edits": [("Friday", "Thursday")]}
+    assert pa('{"type": "insert", "text": "See you!"}') == {"type": "insert", "text": "See you!"}
+    assert pa("Sure thing!") == {"type": "insert", "text": "Sure thing!"}
+    for bad in ('{"type": "edit", "edits": []}', '{"type": "edit", "edits": [}', '{"type": "fly"}', ""):
+        try:
+            pa(bad)
+            raise AssertionError(f"accepted {bad!r}")
+        except edits.EditError:
+            pass
+    steps, result = edits.plan("Hi Sara. Meet Friday? Friday works.", [("Friday?", "Thursday?"), (" Friday works.", "")])
+    assert result == "Hi Sara. Meet Thursday?" and steps == [(14, 7, "Thursday?"), (0, 14, "")], steps
+    try:
+        edits.plan("Hello", [("nope", "x")])
+        raise AssertionError("planned an edit for text that isn't there")
+    except edits.EditError:
+        pass
+
+
 def check_report():
     from . import report
     r = report.redact
@@ -300,7 +322,7 @@ def main():
     for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
-                     ("learning & screen context", check_learning), ("instant text", check_instant),
+                     ("learning & screen context", check_learning), ("instant text", check_instant), ("edit by voice", check_voice_edit),
                      ("problem report", check_report)):
         fn()
         print(f"ok  {name}")

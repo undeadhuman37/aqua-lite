@@ -7,8 +7,8 @@ import threading
 import time
 import tkinter as tk
 
-from . import (audio, config, context, deps, history, hotkeys, instant, learn, live, llm, music, report, sounds, stt,
-               textproc, updater)
+from . import (audio, config, context, deps, edits, history, hotkeys, instant, learn, live, llm, music, report, sounds,
+               stt, textproc, updater)
 from .overlay import FlowBar
 
 IS_WIN = sys.platform == "win32"
@@ -600,7 +600,14 @@ class App:
                 self.post("toast", "Command Mode needs an AI key (Settings > Speech & AI)", "warn", 5)
                 return
             selection, saved = winapi.copy_selection() if IS_WIN else ("", None)
-            final = llm.run_command(cfg, raw, selection, ctx)
+            final = None
+            if not selection.strip() and IS_WIN and target[0].lower() not in textproc.TERMINALS:
+                final = self._voice_edit(raw, ctx, target, saved)   # edit what's already in the box
+                if final is None:  # done: the box was edited in place
+                    self.post("bar", "idle")
+                    return
+            if final is None or final is False:
+                final = llm.run_command(cfg, raw, selection, ctx)
         else:
             final = self._format(raw, ctx)
             if cfg.get("add_trailing_space", True) and final and not final[-1].isspace() and not enter:
@@ -633,6 +640,57 @@ class App:
             self.post("toast", "Can't type into this window - text copied, press Ctrl+V", "warn", 5)
         else:
             self.post("bar", "idle")
+
+    def _voice_edit(self, instruction, ctx, target, saved):
+        """Command Mode with nothing selected. Returns None when it edited the box in place, the text to insert
+        when the instruction asks for new text, or False when there's nothing to edit (insert as before)."""
+        before, exact = instant.text_before_caret(edits.BOX_CHARS)
+        if not before or not before.strip():
+            return False
+        box = before[-edits.BOX_CHARS:]
+        t0 = time.perf_counter()
+        try:
+            answer = edits.parse_answer(llm.voice_edit(self.cfg, instruction, box, ctx))
+        except edits.EditError as e:
+            log.warning("voice edit: %s", e)
+            self.post("toast", "Didn't get that edit - try saying it another way", "warn")
+            return None
+        if answer["type"] == "insert":
+            return answer["text"]
+        li = self.last_insert
+        caret_known = exact or (li and li["pid"] == target[2] and time.time() - li["time"] < 300
+                                and box.endswith(li["text"].replace("\r\n", "\n")))
+        if not caret_known:
+            self.post("toast", "Can't edit by voice in this app - select the text first", "warn", 5)
+            return None
+        try:
+            steps, result = edits.plan(box, answer["edits"])
+        except edits.EditError as e:
+            log.warning("voice edit: %s", e)
+            self.post("toast", "Couldn't find that text to change", "warn")
+            return None
+        cfg = self.cfg
+
+        class Keys:
+            left = staticmethod(lambda n: winapi.tap_key("left", n))
+            right = staticmethod(lambda n: winapi.tap_key("right", n))
+            select_left = staticmethod(winapi.select_left)
+            put = staticmethod(lambda text: winapi.paste(text, cfg, target=target, saved=saved))
+            delete = staticmethod(lambda: winapi.tap_key("delete"))
+
+        winapi.wait_modifiers_released()
+        edits.apply(steps, Keys)
+        time.sleep(0.1)
+        after, _exact = instant.text_before_caret(len(result))
+        clean = after is None or after.replace("\u00a0", " ").endswith(result[-200:])
+        if not clean:
+            self.post("toast", "That edit may not have gone in cleanly - Ctrl+Z undoes it", "warn", 5)
+        self.last_insert = None   # the box changed: "undo last dictation" no longer knows what's there
+        history.add(app=ctx["app"], title=ctx["title"][:200], mode="edit", raw=instruction,
+                    final=" | ".join(f"{o} -> {n}" for o, n in answer["edits"])[:500], seconds=0,
+                    words=0, engine="", latency=time.perf_counter() - t0, status="ok" if clean else "unsure")
+        log.info("voice edit: %d change(s) applied in %s, clean=%s", len(steps), ctx["app"], clean)
+        return None
 
     def _learn(self, final, target):
         known = list(self.cfg.get("dictionary", []))

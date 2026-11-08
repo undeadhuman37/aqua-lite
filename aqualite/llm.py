@@ -45,6 +45,24 @@ COMMAND_SYSTEM = """You are Command Mode in a voice dictation app. The user may 
 Never add preamble, explanations, quotes or markdown fences (unless the content itself is code). Keep the language of the selected text unless the instruction asks for another language. Spell these words exactly: {dictionary}"""
 
 
+VOICE_EDIT_SYSTEM = """You are the voice editor in a dictation app. The user is typing in {app}{title} and spoke an instruction with nothing selected. You get the instruction and the TEXT BEFORE CURSOR (what's already in the box, ending where their cursor is).
+
+Decide which one it is:
+- EDIT: the instruction changes text that is already there - delete, remove, undo that, replace, change X to Y, fix, correct, shorten, rewrite, reword, make it formal/casual, translate what I wrote, add a word inside an existing sentence.
+- INSERT: the instruction asks for new text at the cursor - write, draft, reply, answer, add a new sentence or paragraph at the end, make a list.
+
+Answer with JSON only, exactly one of:
+{{"type": "edit", "edits": [{{"old": "<text copied exactly from TEXT BEFORE CURSOR>", "new": "<replacement; empty string to delete>"}}]}}
+{{"type": "insert", "text": "<text to insert at the cursor>"}}
+
+Rules for edits:
+- "old" must be copied character for character from TEXT BEFORE CURSOR: same spelling, case, punctuation, spaces and line breaks. Make it just long enough to be unique.
+- Keep edits small: change only what the instruction asks for and leave everything else exactly as it is.
+- "that", "it", "the last sentence" and "what I just said" mean the end of the text, right before the cursor.
+- When deleting a sentence or word, include the space before it, so no double space is left behind.
+- For a rewrite of the whole text, one edit whose "old" is the whole text is fine.
+- Keep the text's language unless the instruction asks to translate. Spell these words exactly: {dictionary}"""
+
 LEARNED_BLOCK = """
 
 How this user has edited your output before (oldest first). Learn their preferences - wording, tone, capitalization, punctuation, emoji, formatting - and apply them where they fit. Never copy these sentences' content into the output:
@@ -179,6 +197,16 @@ def format_text(cfg, raw, ctx):
         style=STYLE.get(style_key, STYLE["formal"]), app=app, title=title, category=cat,
         code=CODE_RULE if (cat == "code" and cfg.get("code_mode", True)) else "")
     return _tidy(chat(cfg, system + _extras(ctx), f"RAW TRANSCRIPT:\n<<<\n{raw}\n>>>"))
+
+
+def voice_edit(cfg, instruction, before, ctx):
+    """Edit by voice: returns the raw JSON answer (see edits.parse_answer)."""
+    app, title = _where(ctx)
+    system = VOICE_EDIT_SYSTEM.format(app=app, title=title,
+                                      dictionary=", ".join(cfg.get("dictionary") or []) or "(none)")
+    system += _extras(ctx, True)
+    user = f"INSTRUCTION: {instruction}\n\nTEXT BEFORE CURSOR:\n<<<\n{before}\n>>>"
+    return chat(cfg, system, user, max_tokens=3000, timeout=45).strip()
 
 
 def run_command(cfg, instruction, selection, ctx):
