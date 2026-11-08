@@ -42,6 +42,8 @@ def vocab_prompt(cfg, hints=()):
 
 
 def resolve_engine(cfg):
+    if cfg.get("private_mode"):
+        return "local"   # private mode: speech never leaves the PC either
     e = cfg.get("stt_engine", "auto")
     if e == "auto":
         if cfg.get("groq_api_key"):

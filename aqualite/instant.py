@@ -19,10 +19,10 @@ from . import stt
 
 log = logging.getLogger("aqualite")
 RATE = 16000
-EVERY_SECS = 0.45     # how often to re-read the audio
+EVERY_SECS = 0.3      # how often to re-read the audio
 MIN_SECS = 0.6        # don't bother with less audio than this
-TRIM_SECS = 12.0      # keep the re-read window short: cut it after the last finished sentence
-HARD_TRIM_SECS = 20.0  # no sentence end for this long: cut after the last typed word anyway
+TRIM_SECS = 6.0       # keep the re-read window short: cut it after the last finished sentence
+HARD_TRIM_SECS = 9.0  # no sentence end for this long: cut after the last typed word anyway
 PROMPT_CHARS = 200    # typed text passed back to the model, so it keeps the thread
 SENTENCE_END = (".", "?", "!", "؟", "。")
 
@@ -98,6 +98,7 @@ class Streamer:
         self.closed = False
         self.failed = None
         self.thread = None
+        self.pass_secs = []          # how long each pass took, for the log
 
     def start(self):
         self.thread = threading.Thread(target=self._run, daemon=True, name="instant-text")
@@ -111,6 +112,10 @@ class Streamer:
             self.closed = True
         if self.thread and self.thread is not threading.current_thread():
             self.thread.join(wait)
+        if self.pass_secs:
+            ps = sorted(self.pass_secs)
+            log.info("instant text: %d passes, median %.2fs, slowest %.2fs, model %s, typed %d chars",
+                     len(ps), ps[len(ps) // 2], ps[-1], getattr(self.model, "name", "?"), len(self.typed))
         return self.typed
 
     # ------------------------------------------------------------------ the passes
@@ -119,7 +124,8 @@ class Streamer:
         while not self.stop_event.is_set():
             t0 = time.perf_counter()
             try:
-                self.step()
+                if self.step():
+                    self.pass_secs.append(time.perf_counter() - t0)
             except Exception as e:
                 self.failed = str(e)
                 log.warning("instant text stopped: %s", e)
@@ -133,7 +139,7 @@ class Streamer:
     def step(self):
         audio = self.recorder.audio_from(self.offset)
         if len(audio) < RATE * MIN_SECS or self.recorder.speech_frames <= 0:
-            return
+            return False
         words = [(w, s + self.offset, e + self.offset) for w, s, e in self.model.words(audio, self.cfg, self.prompt())]
         heard = join_words(words)
         if heard and stt.is_hallucination(heard, 1.0):
@@ -145,6 +151,7 @@ class Streamer:
             shown = self.agree.committed[-8:] + self.agree.pending
             self.on_caption(join_words(shown))
         self._trim()
+        return True
 
     def _type(self, words):
         text = join_words(words, first=not self.typed)

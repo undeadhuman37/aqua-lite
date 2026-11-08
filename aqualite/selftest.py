@@ -297,6 +297,23 @@ def check_voice_edit():
         pass
 
 
+def check_private_mode():
+    from . import localai
+    rel = {"tag_name": "b1", "assets": [{"name": "llama-b1-bin-win-cuda-12.4-x64.zip", "browser_download_url": "c"},
+                                        {"name": "llama-b1-bin-win-vulkan-x64.zip", "browser_download_url": "v",
+                                         "size": 5, "digest": "sha256:ab"},
+                                        {"name": "llama-b1-bin-win-cpu-x64.zip", "browser_download_url": "p"}]}
+    assert localai.find_engine_asset(rel, "vulkan") == ("llama-b1-bin-win-vulkan-x64.zip", "v", 5, "ab")
+    assert localai.find_engine_asset(rel, "cpu")[1] == "p"
+    sib = {"siblings": [{"rfilename": "x-UD-Q4_K_XL.gguf"}, {"rfilename": "x-Q4_K_M.gguf", "lfs": {"sha256": "s", "size": 7}},
+                        {"rfilename": "mmproj-x-Q4_K_M.gguf"}, {"rfilename": "x-Q8_0.gguf"}]}
+    assert localai.find_model_file(sib, "Q4_K_M") == ("x-Q4_K_M.gguf", 7, "s")
+    assert localai.request_extras("qwen3-1.7b") and not localai.request_extras("qwen3-4b")
+    assert "--port" in localai.server_command("e", "m", 1) and "127.0.0.1" in localai.server_command("e", "m", 1)
+    assert llm._tidy("<think>x</think>Hello.") == "Hello."
+    assert stt.resolve_engine({"private_mode": True, "groq_api_key": "k"}) == "local"
+
+
 def check_report():
     from . import report
     r = report.redact
@@ -323,6 +340,7 @@ def main():
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
                      ("learning & screen context", check_learning), ("instant text", check_instant), ("edit by voice", check_voice_edit),
+                     ("private mode", check_private_mode),
                      ("problem report", check_report)):
         fn()
         print(f"ok  {name}")

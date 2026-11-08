@@ -113,15 +113,30 @@ class AIError(Exception):
     pass
 
 
+def _local_model(cfg):
+    from . import localai
+    key = cfg.get("local_ai_model", localai.DEFAULT_MODEL)
+    return key if key in localai.MODELS else localai.DEFAULT_MODEL
+
+
+def _local_ready(cfg):
+    from . import localai
+    return localai.ready(_local_model(cfg))
+
+
 def resolve_provider(cfg):
+    if cfg.get("private_mode"):
+        return "local" if _local_ready(cfg) else None   # never falls back to a cloud provider
     p = cfg.get("ai_provider", "auto")
     if p == "off":
         return None
+    if p == "local":
+        return "local" if _local_ready(cfg) else None
     if p == "auto":
         for name, key in (("groq", "groq_api_key"), ("anthropic", "anthropic_api_key"), ("openai", "openai_api_key")):
             if cfg.get(key):
                 return name
-        return None
+        return "local" if _local_ready(cfg) else None
     if p == "custom":
         return "custom" if cfg.get("custom_base_url") else None
     return p if cfg.get(f"{p}_api_key") else None
@@ -158,6 +173,15 @@ def chat(cfg, system, user, max_tokens=1500, timeout=25, provider=None):
         extra = {"max_completion_tokens": max_tokens + 1000, "reasoning_effort": "low"}
         return _openai_style("https://api.openai.com/v1/chat/completions", cfg["openai_api_key"],
                              cfg["openai_llm_model"], system, user, max_tokens, timeout, extra)
+    if provider == "local":  # private mode: the model built into Aqua Lite (localai.py)
+        from . import localai
+        key = _local_model(cfg)
+        base = localai.ensure(key)
+        extra = {"max_tokens": max_tokens, "temperature": 0.2, **localai.request_extras(key)}
+        if localai.MODELS[key].get("thinking"):
+            user += "\n/no_think"   # Qwen3's own switch, in case the server ignores the template option
+        return _openai_style(base + "/v1/chat/completions", None, "local", system, user, max_tokens,
+                             max(timeout, 90), extra)
     if provider == "custom":
         url = cfg["custom_base_url"].rstrip("/") + "/chat/completions"
         return _openai_style(url, cfg.get("custom_api_key"), cfg["custom_llm_model"], system, user,
@@ -175,6 +199,7 @@ def chat(cfg, system, user, max_tokens=1500, timeout=25, provider=None):
 
 
 def _tidy(out):
+    out = re.sub(r"<think>.*?</think>", "", out or "", flags=re.S)   # small local models may think out loud
     out = out.strip()
     out = re.sub(r"^<<<\s*|\s*>>>$", "", out)
     if len(out) > 1 and out[0] == out[-1] and out[0] in "\"'“”":
@@ -206,7 +231,8 @@ def voice_edit(cfg, instruction, before, ctx):
                                       dictionary=", ".join(cfg.get("dictionary") or []) or "(none)")
     system += _extras(ctx, True)
     user = f"INSTRUCTION: {instruction}\n\nTEXT BEFORE CURSOR:\n<<<\n{before}\n>>>"
-    return chat(cfg, system, user, max_tokens=3000, timeout=45).strip()
+    out = chat(cfg, system, user, max_tokens=3000, timeout=45)
+    return re.sub(r"<think>.*?</think>", "", out or "", flags=re.S).strip()
 
 
 def run_command(cfg, instruction, selection, ctx):

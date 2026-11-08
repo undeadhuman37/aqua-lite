@@ -7,8 +7,8 @@ import threading
 import time
 import tkinter as tk
 
-from . import (audio, config, context, deps, edits, history, hotkeys, instant, learn, live, llm, music, report, sounds,
-               stt, textproc, updater)
+from . import (audio, config, context, deps, edits, history, hotkeys, instant, learn, live, llm, localai, music, report,
+               sounds, stt, textproc, updater)
 from .overlay import FlowBar
 
 IS_WIN = sys.platform == "win32"
@@ -142,8 +142,21 @@ class App:
     def _preload(self):
         if stt.resolve_engine(self.cfg) == "local":
             threading.Thread(target=self._safe_load, daemon=True).start()
-        if (self.cfg.get("live_preview", True) or self.cfg.get("instant_text", True)) and live.PREVIEW.model is None:
+        if self.cfg.get("live_preview", True) and live.PREVIEW.model is None:
             live.PREVIEW.preload(self.cfg)
+        if self.cfg.get("instant_text", True) and live.INSTANT.model is None:
+            live.INSTANT.preload(self.cfg)
+        if llm.resolve_provider(self.cfg) == "local":  # load the private AI now, so the first dictation isn't slow
+            threading.Thread(target=self._warm_local_ai, daemon=True, name="local-ai").start()
+        elif not self.cfg.get("private_mode") and localai.running():
+            threading.Thread(target=localai.stop, daemon=True).start()
+
+    def _warm_local_ai(self):
+        try:
+            localai.ensure(llm._local_model(self.cfg))
+        except Exception as e:
+            log.warning("private mode: AI didn't start: %s", e)
+            self.post("toast", "Private AI couldn't start - see Settings > Private", "error", 5)
 
     def _safe_load(self):
         try:
@@ -190,11 +203,10 @@ class App:
     def _start_instant(self):
         """Type words into the focused app while the user talks (see instant.py)."""
         cfg = self.cfg
-        if not (IS_WIN and cfg.get("instant_text", True)) or live.PREVIEW.failed:
+        if not (IS_WIN and cfg.get("instant_text", True)) or live.INSTANT.failed:
             return
-        if live.PREVIEW.model is None:  # still loading (or downloading the first time): not this time
-            if not live.PREVIEW.lock.locked():
-                live.PREVIEW.preload(cfg)
+        if live.INSTANT.model is None or live.INSTANT.loading:  # still loading / picking: not this time
+            live.INSTANT.preload(cfg)
             return
         try:
             proc, title, pid = winapi.foreground()
@@ -218,7 +230,7 @@ class App:
         def type_here(text):  # only ever into the window the dictation started in
             return winapi.user32.GetForegroundWindow() == hwnd and winapi.type_text(text)
 
-        st = instant.Streamer(self.recorder, cfg, live.PREVIEW, type_here, before_first,
+        st = instant.Streamer(self.recorder, cfg, live.INSTANT, type_here, before_first,
                               on_caption=lambda text: self.post("caption", text),
                               allow=lambda: not instant.is_password_box())
         self.instant = (st, (hwnd, proc, title, pid))
@@ -329,8 +341,13 @@ class App:
             "speech engine": stt.resolve_engine(self.cfg),
             "local model": stt.LOCAL.status,
             "AI formatting": llm.resolve_provider(self.cfg) or "off",
+            "private mode": (f"on, {llm._local_model(self.cfg)}, server {'running' if localai.running() else 'stopped'}"
+                             if self.cfg.get("private_mode") else "off"),
             "live words model": ("failed" if live.PREVIEW.failed else
                                  f"{live.PREVIEW.name} ready" if live.PREVIEW.model else "not loaded"),
+            "instant text model": ("failed" if live.INSTANT.failed else
+                                   f"{live.INSTANT.name} ({live.INSTANT.threads} threads)" if live.INSTANT.model
+                                   else "not loaded"),
             "learning corrections": "off (UI Automation unavailable)" if self.learner.disabled else "available",
             "packages up to date": deps.up_to_date() if deps.in_private_env() else "n/a (not an installed copy)",
             "keyboard hook": (self.hook.error or "ok") if self.hook else "n/a",
@@ -372,6 +389,7 @@ class App:
         self.bar.toast("Shortcuts paused" if self.paused else "Shortcuts back on", "warn" if self.paused else "ok")
 
     def ev_quit(self):
+        localai.stop()
         if self.hook:
             self.hook.stop()
         if self.tray:

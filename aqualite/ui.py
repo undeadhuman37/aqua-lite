@@ -7,7 +7,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import aero, history, hotkeys, llm, music, stt
+from . import aero, history, hotkeys, llm, localai, music, stt
 from .config import APP_NAME, VERSION
 
 LANGS = [("auto", "Auto-detect"), ("en", "English"), ("ar", "Arabic"), ("fr", "French"), ("es", "Spanish"),
@@ -113,7 +113,8 @@ class SettingsWindow:
         nb.pack(fill="both", expand=True, padx=10, pady=(8, 0))
         self.nb = nb
         for title, build in (("Home", self._home), ("Shortcuts & mic", self._general),
-                             ("Speech & AI", self._ai), ("Style", self._style), ("Music", self._music),
+                             ("Speech & AI", self._ai), ("Private", self._private), ("Style", self._style),
+                             ("Music", self._music),
                              ("Dictionary", self._dictionary), ("Snippets", self._snippets),
                              ("History", self._history)):
             f = ttk.Frame(nb, padding=14)
@@ -273,6 +274,115 @@ class SettingsWindow:
         ttk.Label(keys, text="Get a free Groq key at console.groq.com/keys - it powers both speech and formatting.",
                   foreground="#777").grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 0))
         ttk.Button(f, text="Test AI connection", command=self._test_ai).pack(anchor="w", pady=10)
+
+    def _private(self, f):
+        ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
+            "Private mode keeps everything on this PC. Your voice is turned into text by the offline speech model, "
+            "and the AI clean-up, Command Mode and edit-by-voice run on an AI model built into Aqua Lite. No account, "
+            "no API key, nothing sent out, and it works without internet once it's downloaded.")).pack(anchor="w")
+        row = ttk.Frame(f)
+        row.pack(fill="x", pady=(14, 4))
+        ttk.Label(row, text="AI model").pack(side="left", padx=(0, 8))
+        self.ai_keys = list(localai.MODELS)
+        self.ai_model = ttk.Combobox(row, state="readonly", width=62,
+                                     values=[localai.MODELS[k]["label"] for k in self.ai_keys])
+        cur = self.cfg.get("local_ai_model", localai.DEFAULT_MODEL)
+        self.ai_model.current(self.ai_keys.index(cur) if cur in self.ai_keys else 0)
+        self.ai_model.pack(side="left")
+        self.ai_model.bind("<<ComboboxSelected>>", lambda _e: self._ai_refresh())
+        btns = ttk.Frame(f)
+        btns.pack(anchor="w", pady=(8, 4))
+        self.ai_dl = ttk.Button(btns, text="Download", command=self._ai_download)
+        self.ai_dl.pack(side="left")
+        self.ai_cancel_btn = ttk.Button(btns, text="Cancel", command=self._ai_cancel, state="disabled")
+        self.ai_cancel_btn.pack(side="left", padx=6)
+        self.ai_bar = ttk.Progressbar(f, length=560, mode="determinate", maximum=1000)
+        self.ai_bar.pack(anchor="w", pady=(4, 2))
+        self.ai_status = ttk.Label(f, text="", style="Muted.TLabel")
+        self.ai_status.pack(anchor="w")
+        ttk.Checkbutton(f, text="Private mode: keep my voice and text on this PC",
+                        variable=self._var("private_mode", tk.BooleanVar),
+                        command=self._private_toggled).pack(anchor="w", pady=(14, 2))
+        ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
+            "Speech uses the offline model picked under Speech & AI (\"small\" is a good balance). With a graphics "
+            "card the AI answers in about a second; on the processor alone it can take several seconds, so pick the "
+            "Small model there.")).pack(anchor="w", padx=(22, 0))
+        ttk.Button(f, text="Delete the downloaded AI", command=self._ai_delete).pack(anchor="w", pady=(16, 0))
+        self.ai_job = None
+        self._ai_refresh()
+
+    def _ai_key(self):
+        return self.ai_keys[max(0, self.ai_model.current())]
+
+    def _ai_refresh(self):
+        if self.ai_job:  # a download is running: its own updates own the status line
+            return
+        key = self._ai_key()
+        ok = localai.ready(key)
+        self.ai_dl.configure(text="Downloaded" if ok else "Download", state="disabled" if ok else "normal")
+        self.ai_bar.configure(value=1000 if ok else 0)
+        self.ai_status.configure(text="Ready to use." if ok else "Not downloaded yet.")
+
+    def _ai_download(self):
+        key = self._ai_key()
+        cancel = threading.Event()
+        job = {"stage": "Starting...", "done": 0, "total": None, "error": None, "finished": False, "cancel": cancel}
+        self.ai_job = job
+
+        def progress(stage, done, total):
+            job.update(stage=stage, done=done, total=total)
+
+        def run():
+            try:
+                localai.install(key, progress, cancel)
+            except Exception as e:
+                job["error"] = str(e)
+            job["finished"] = True
+        self.ai_dl.configure(state="disabled")
+        self.ai_cancel_btn.configure(state="normal")
+        threading.Thread(target=run, daemon=True, name="ai-download").start()
+        self._ai_poll()
+
+    def _ai_poll(self):
+        job = self.ai_job
+        if job is None or not self.win.winfo_exists():
+            return
+        total, done = job["total"], job["done"]
+        if total:
+            self.ai_bar.configure(mode="determinate", value=int(1000 * done / total))
+            self.ai_status.configure(text=f"{job['stage']}  {done / 1e6:,.0f} of {total / 1e6:,.0f} MB")
+        else:
+            self.ai_status.configure(text=job["stage"])
+        if not job["finished"]:
+            self.win.after(200, self._ai_poll)
+            return
+        self.ai_job = None
+        self.ai_cancel_btn.configure(state="disabled")
+        if job["error"]:
+            self._ai_refresh()
+            self.ai_status.configure(text=("Cancelled." if job["error"] == "cancelled"
+                                           else f"Download failed: {job['error'][:150]}"))
+            return
+        self._ai_refresh()
+        self.v["private_mode"].set(True)
+        self.ai_status.configure(text="Downloaded and tested. Click Save to switch to private mode.")
+
+    def _ai_cancel(self):
+        if self.ai_job:
+            self.ai_job["cancel"].set()
+
+    def _private_toggled(self):
+        if self.v["private_mode"].get() and not localai.ready(self._ai_key()):
+            self.v["private_mode"].set(False)
+            messagebox.showinfo(APP_NAME, "Download the AI model first (the Download button above).", parent=self.win)
+
+    def _ai_delete(self):
+        if self.ai_job:
+            return
+        if messagebox.askyesno(APP_NAME, "Delete the downloaded private AI (engine and models)?", parent=self.win):
+            localai.remove_all()
+            self.v["private_mode"].set(False)
+            self._ai_refresh()
 
     def _style(self, f):
         ttk.Label(f, text="Aqua Lite formats differently depending on where you're typing.",
@@ -562,6 +672,7 @@ class SettingsWindow:
         cfg["editing_strength"] = self.strength.get_key()
         cfg["styles"] = {k: cb.get_key() for k, cb in self.style_boxes.items()}
         cfg["dictionary"] = list(self.dict_list.get(0, "end"))
+        cfg["local_ai_model"] = self._ai_key()
         cfg["context_blocked_apps"] = [a.strip().lower().removesuffix(".exe") for a in self.blocked.get().split(",")
                                        if a.strip()]
         cfg["replacements"] = [{"from": str(self.rep_tree.item(i)["values"][0]), "to": str(self.rep_tree.item(i)["values"][1])}
@@ -577,6 +688,8 @@ class SettingsWindow:
                       "hotkey_undo_last"):
                 hotkeys.parse(cfg[k])
             float(cfg.get("handsfree_silence_secs") or 0)
+            if cfg.get("private_mode") and not localai.ready(cfg.get("local_ai_model", localai.DEFAULT_MODEL)):
+                raise ValueError("private mode needs the selected AI model downloaded first (Private tab)")
         except ValueError as e:
             messagebox.showerror(APP_NAME, f"Setting problem: {e}", parent=self.win)
             return

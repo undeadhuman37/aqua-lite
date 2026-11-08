@@ -753,3 +753,46 @@ def display_timing():
     except Exception:
         vblank = None
     return (period or 1 / 60), vblank
+
+
+
+# ------------------------------------------------------------------ child processes
+class _IO_COUNTERS(ctypes.Structure):
+    _fields_ = [(n, ctypes.c_ulonglong) for n in ("ReadOps", "WriteOps", "OtherOps", "ReadBytes", "WriteBytes",
+                                                  "OtherBytes")]
+
+
+class _JOB_BASIC_LIMITS(ctypes.Structure):
+    _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", W.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", W.DWORD),
+                ("Affinity", ULONG_PTR), ("PriorityClass", W.DWORD), ("SchedulingClass", W.DWORD)]
+
+
+class _JOB_EXTENDED_LIMITS(ctypes.Structure):
+    _fields_ = [("BasicLimitInformation", _JOB_BASIC_LIMITS), ("IoInfo", _IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+
+_proto(kernel32.CreateJobObjectW, HANDLE, ctypes.c_void_p, W.LPCWSTR)
+_proto(kernel32.SetInformationJobObject, W.BOOL, HANDLE, ctypes.c_int, ctypes.c_void_p, W.DWORD)
+_proto(kernel32.AssignProcessToJobObject, W.BOOL, HANDLE, HANDLE)
+_job = None
+
+
+def close_with_us(popen):
+    """Tie a child process (the private AI server) to Aqua Lite: when Aqua Lite exits - even if it crashes -
+    Windows closes the child too, so it never lingers using memory."""
+    global _job
+    if _job is None:
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            raise OSError(ctypes.get_last_error(), "CreateJobObject failed")
+        info = _JOB_EXTENDED_LIMITS()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
+        _job = job
+    if not kernel32.AssignProcessToJobObject(_job, HANDLE(int(popen._handle))):
+        raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
