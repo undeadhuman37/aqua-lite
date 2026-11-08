@@ -291,6 +291,39 @@ class SettingsWindow:
         ttk.Checkbutton(f, text="Code mode: in code editors and terminals, keep file names, variables and commands exact",
                         variable=self._var("code_mode", tk.BooleanVar)).pack(anchor="w", pady=10)
 
+        smart = ttk.LabelFrame(f, text="Get to know me", padding=10)
+        smart.pack(fill="x", pady=(4, 0))
+        ttk.Checkbutton(smart, text="Learn from how I edit Aqua Lite's text (wording, punctuation, emoji, formatting)",
+                        variable=self._var("learn_style", tk.BooleanVar)).grid(row=0, column=0, columnspan=3, sticky="w")
+        self.learned_label = ttk.Label(smart, text="", style="Muted.TLabel")
+        self.learned_label.grid(row=1, column=0, sticky="w", padx=(22, 0))
+        ttk.Button(smart, text="Forget what it learned", command=self._forget_edits).grid(row=1, column=1, sticky="w",
+                                                                                         padx=10)
+        ttk.Checkbutton(smart, text="Read the conversation on screen so names, topic and tone fit what I'm replying to",
+                        variable=self._var("screen_context", tk.BooleanVar)).grid(row=2, column=0, columnspan=3,
+                                                                                    sticky="w", pady=(10, 0))
+        ttk.Label(smart, style="Muted.TLabel", wraplength=700, text=(
+            "Reads only what's visible in the app you're dictating into, and sends it to your AI provider with the "
+            "dictation. Never saved. Password boxes and private/incognito windows are never read.")).grid(
+            row=3, column=0, columnspan=3, sticky="w", padx=(22, 0))
+        ttk.Label(smart, text="Never read these apps").grid(row=4, column=0, sticky="w", padx=(22, 0), pady=(6, 0))
+        self.blocked = tk.StringVar(value=", ".join(self.cfg.get("context_blocked_apps") or []))
+        ttk.Entry(smart, textvariable=self.blocked, width=60).grid(row=4, column=1, columnspan=2, sticky="w",
+                                                                   pady=(6, 0))
+        self._count_edits()
+
+    def _count_edits(self):
+        try:
+            n = history.correction_count()
+        except Exception:
+            n = 0
+        self.learned_label.configure(text=f"Learned from {n} edit{'s' if n != 1 else ''} so far (kept on this PC)")
+
+    def _forget_edits(self):
+        if messagebox.askyesno(APP_NAME, "Forget everything Aqua Lite learned from your edits?", parent=self.win):
+            history.clear_corrections()
+            self._count_edits()
+
     def _music(self, f):
         ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
             "While you dictate, Aqua Lite softly plays a random part of a song from your music folder, then fades it "
@@ -528,6 +561,8 @@ class SettingsWindow:
         cfg["editing_strength"] = self.strength.get_key()
         cfg["styles"] = {k: cb.get_key() for k, cb in self.style_boxes.items()}
         cfg["dictionary"] = list(self.dict_list.get(0, "end"))
+        cfg["context_blocked_apps"] = [a.strip().lower().removesuffix(".exe") for a in self.blocked.get().split(",")
+                                       if a.strip()]
         cfg["replacements"] = [{"from": str(self.rep_tree.item(i)["values"][0]), "to": str(self.rep_tree.item(i)["values"][1])}
                                for i in self.rep_tree.get_children()]
         cfg["snippets"] = [{"trigger": t, "text": x} for t, x in

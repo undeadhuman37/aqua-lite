@@ -215,3 +215,48 @@ def learned_words(dictated, edited):
                     and (m.start() not in sentence_starts or sum(c.isupper() for c in new) > 1):
                 out.append(new)
     return out
+
+
+_TOK = re.compile(r"[\w'’-]+|[^\w\s]", re.UNICODE)
+
+
+def style_edit(dictated, edited, max_len=500):
+    """Was the user's edit of a dictation a preference worth learning (wording, punctuation, formatting)?
+    Returns the (before, after) pair to remember, or None. Leaves out text typed before/after the dictation,
+    total rewrites (they replaced it with something else) and plain name fixes (the dictionary covers those)."""
+    import difflib
+    a_txt, b_txt = (dictated or "").strip(), (edited or "").strip()
+    if not a_txt or not b_txt or a_txt == b_txt:
+        return None
+    a = [(m.group(), m.start(), m.end()) for m in _TOK.finditer(a_txt)]
+    b = [(m.group(), m.start(), m.end()) for m in _TOK.finditer(b_txt)]
+    if not a or not b:
+        return None
+    ops = difflib.SequenceMatcher(None, [t[0].lower() for t in a], [t[0].lower() for t in b],
+                                  autojunk=False).get_opcodes()
+    # carried on typing after (or before) the dictation: that's new text, not an edit
+    if ops and ops[-1][0] == "insert" and ops[-1][1] == len(a):
+        b_txt = b_txt[:b[ops[-1][3]][1]].rstrip()
+        ops = ops[:-1]
+    if ops and ops[0][0] == "insert" and ops[0][1] == 0:
+        b_txt = b_txt[b[ops[0][4] - 1][2]:].lstrip() if ops[0][4] < len(b) else ""
+        cut = ops[0][4]
+        ops = [(op, i1, i2, j1 - cut, j2 - cut) for op, i1, i2, j1, j2 in ops[1:]]
+        b = [(t, s - b[cut][1], e - b[cut][1]) for t, s, e in b[cut:]] if cut < len(b) else []
+    if not b_txt or b_txt == a_txt:
+        return None
+    changes = [o for o in ops if o[0] != "equal"]
+    if not changes and a_txt.split() == b_txt.split():
+        return None           # spacing only (case-only edits like 'Hey' -> 'hey' are kept: that's a style)
+    if difflib.SequenceMatcher(None, a_txt.lower(), b_txt.lower()).ratio() < 0.4:
+        return None           # rewrote it into something else entirely
+    names_only = bool(changes) and all(op == "replace" and (i2 - i1) <= 2 and (j2 - j1) <= 2
+                     and _ratio(" ".join(t[0] for t in a[i1:i2]), " ".join(t[0] for t in b[j1:j2])) >= 0.5
+                     and any(c.isalpha() for c in "".join(t[0] for t in b[j1:j2]))
+                     and not any(t[0].lower() == u[0].lower() for t in a[i1:i2] for u in b[j1:j2])
+                     for op, i1, i2, j1, j2 in changes)
+    if names_only:
+        return None           # 'Patrisio' -> 'Patricio': a dictionary word, already learned
+    if len(a_txt) > max_len or len(b_txt) > max_len:
+        return None
+    return a_txt, b_txt

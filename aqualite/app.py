@@ -7,7 +7,7 @@ import threading
 import time
 import tkinter as tk
 
-from . import audio, config, deps, history, hotkeys, learn, live, llm, music, report, sounds, stt, textproc, updater
+from . import audio, config, context, deps, history, hotkeys, learn, live, llm, music, report, sounds, stt, textproc, updater
 from .overlay import FlowBar
 
 IS_WIN = sys.platform == "win32"
@@ -42,7 +42,9 @@ class App:
         self.root.title("Aqua Lite")
         self.bar = FlowBar(self.root, lambda: self.recorder.level, self._bar_clicked, self.cfg.get("show_idle_bar", False))
         self.live = live.LiveCaption(self.recorder, self.cfg, lambda text: self.post("caption", text))
-        self.learner = learn.Learner(lambda words: self.post("learned", words))
+        self.learner = learn.Learner(lambda words: self.post("learned", words), on_edited=self._edited)
+        self.edit_where = ("", "other")   # app + category of the dictation being watched for edits
+        self.grab = None                  # screen context being read for the current recording
 
         self.tray = None
         try:
@@ -147,6 +149,13 @@ class App:
             self.bar.toast(f"Microphone error: {e}", "error", 5)
             return
         self.rec_started, self.rec_command = time.time(), command
+        self.grab = None
+        if IS_WIN and self.cfg.get("screen_context", False):
+            try:
+                proc, title, _pid = winapi.foreground()
+                self.grab = context.grab(winapi.user32.GetForegroundWindow(), proc, title, self.cfg)
+            except Exception as e:
+                log.info("context: not started: %s", e)
         self.bar.set_state("command" if command else "recording")
         self.live.start()
         self.learner.stop()
@@ -427,7 +436,9 @@ class App:
             return
         if cfg.get("whisper_boost", True):
             pcm = audio.boost(pcm)
-        raw, engine = stt.transcribe(pcm, cfg)
+        screen, draft = self.grab.get(0.6) if self.grab else ("", "")
+        self.grab = None
+        raw, engine = stt.transcribe(pcm, cfg, context.hint_names(screen))
         if stt.is_hallucination(raw, speech_secs):
             raw = ""
         if not raw.strip():
@@ -444,6 +455,12 @@ class App:
                 self.post("bar", "idle")
                 return
         ctx, target = self._context()
+        ctx.update(screen=screen, draft=draft)
+        if mode == "dictation" and cfg.get("learn_style", True):
+            try:
+                ctx["examples"] = history.corrections_for(ctx["category"])
+            except Exception as e:
+                log.warning("learned edits unavailable: %s", e)
         status = "ok"
         saved = None
         if mode == "command":
@@ -467,19 +484,34 @@ class App:
                     winapi.press_enter()
                 self.last_insert = {"text": final, "proc": target[0], "pid": target[2], "time": time.time(),
                                     "sent": enter, "mode": mode}
-                if mode == "dictation" and cfg.get("learn_corrections", True) and not enter:
+                if mode == "dictation" and not enter and (cfg.get("learn_corrections", True)
+                                                          or cfg.get("learn_style", True)):
+                    self.edit_where = (ctx["app"], ctx["category"])
                     self._learn(final, target)
         history.add(app=ctx["app"], title=ctx["title"][:200], mode=mode, raw=raw, final=final.strip(),
                     seconds=seconds, words=textproc.word_count(final), engine=engine, latency=latency, status=status)
-        log.info("%s %.1fs audio, %.2fs, %s [%s] -> %s | text=%r", mode, seconds, latency, engine, ctx["category"],
-                 result.get("keys"), final)
+        log.info("%s %.1fs audio, %.2fs, %s [%s] -> %s, context %d chars, %d learned edits | text=%r", mode, seconds,
+                 latency, engine, ctx["category"], result.get("keys"), len(screen), len(ctx.get("examples") or []), final)
         if status in ("elevated", "blocked"):
             self.post("toast", "Can't type into this window - text copied, press Ctrl+V", "warn", 5)
         else:
             self.post("bar", "idle")
 
     def _learn(self, final, target):
-        self.learner.watch(final, list(self.cfg.get("dictionary", [])))
+        known = list(self.cfg.get("dictionary", []))
+        if not self.cfg.get("learn_corrections", True):
+            known = None  # words off: watch only for phrasing edits
+        self.learner.watch(final, known if known is not None else [], edits=self.cfg.get("learn_style", True),
+                           words=known is not None)
+
+    def _edited(self, dictated, edited):
+        """Called from the learner's thread when you've reworded a dictation and left it that way."""
+        pair = textproc.style_edit(dictated, edited)
+        if not pair:
+            return
+        app, cat = self.edit_where
+        history.add_correction(app, cat, *pair)
+        log.info("learned an edit in %s (%s), %d chars -> %d chars", app, cat, len(pair[0]), len(pair[1]))
 
     def ev_learned(self, words):
         dic = list(self.cfg.get("dictionary", []))

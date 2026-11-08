@@ -3,6 +3,14 @@
 Headings are `## <version>` or `## <version> - <update name>`. The first line under each heading is what the app
 shows once after updating (keep it under 52 characters).
 
+## 1.5.0 - Gets To Know You Update
+learns how you write and reads the chat you reply to
+- **Learns how you write:** when you reword what Aqua Lite typed (lowercase, no full stops, "5:30pm", fewer
+  exclamation marks), it remembers and writes that way next time. See what it learned, or forget it, in Settings > Style.
+- **Understands the conversation (optional, off by default):** turn it on in Settings > Style and Aqua Lite reads
+  the chat you're replying to, so names, spellings, topic and tone fit.
+- **Command Mode can reply:** with the conversation option on, say "reply to this saying I'm in" with nothing selected.
+
 ## 1.4.0 - High Hertz Update
 silky Flow bar at your monitor's full refresh rate
 - **Runs at your monitor's refresh rate:** 60, 144, 240, 360 Hz and up. Every frame is timed to land exactly

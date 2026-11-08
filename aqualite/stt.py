@@ -33,8 +33,11 @@ def to_wav(audio):
     return buf.getvalue()
 
 
-def vocab_prompt(cfg):
+def vocab_prompt(cfg, hints=()):
+    """Spelling hints for the speech model: your dictionary, then names seen on screen (screen context)."""
     words = [w for w in (cfg.get("dictionary") or []) if w.strip()]
+    have = {w.lower() for w in words}
+    words += [h for h in hints if h.strip() and h.lower() not in have]
     return (", ".join(words) + ".")[:800] if words else ""
 
 
@@ -49,11 +52,11 @@ def resolve_engine(cfg):
     return e
 
 
-def _cloud(url, key, model, audio, cfg):
+def _cloud(url, key, model, audio, cfg, hints=()):
     data = {"model": model, "response_format": "json", "temperature": "0"}
     if cfg.get("language", "auto") != "auto":
         data["language"] = cfg["language"]
-    p = vocab_prompt(cfg)
+    p = vocab_prompt(cfg, hints)
     if p:
         data["prompt"] = p
     try:
@@ -98,11 +101,11 @@ class LocalWhisper:
             self.status = f"{name} ready ({'GPU' if model.model.device == 'cuda' else 'CPU'})"
             return model
 
-    def transcribe(self, audio, cfg):
+    def transcribe(self, audio, cfg, hints=()):
         model = self.load(cfg)
         lang = None if cfg.get("language", "auto") == "auto" else cfg["language"]
         segs, _ = model.transcribe(audio, language=lang, vad_filter=True, beam_size=1,
-                                   initial_prompt=vocab_prompt(cfg) or None,
+                                   initial_prompt=vocab_prompt(cfg, hints) or None,
                                    condition_on_previous_text=False)
         return " ".join(s.text.strip() for s in segs).strip()
 
@@ -110,20 +113,20 @@ class LocalWhisper:
 LOCAL = LocalWhisper()
 
 
-def transcribe(audio, cfg):
-    """Returns (text, engine_used)."""
+def transcribe(audio, cfg, hints=()):
+    """Returns (text, engine_used). `hints`: extra words to spell right (names seen on screen)."""
     engine = resolve_engine(cfg)
     try:
         if engine == "groq":
             text = _cloud("https://api.groq.com/openai/v1/audio/transcriptions", cfg["groq_api_key"],
-                          cfg["groq_stt_model"], audio, cfg)
+                          cfg["groq_stt_model"], audio, cfg, hints)
         elif engine == "openai":
             text = _cloud("https://api.openai.com/v1/audio/transcriptions", cfg["openai_api_key"],
-                          cfg["openai_stt_model"], audio, cfg)
+                          cfg["openai_stt_model"], audio, cfg, hints)
         else:
-            text = LOCAL.transcribe(audio, cfg)
+            text = LOCAL.transcribe(audio, cfg, hints)
     except STTError:
         if engine == "local" or LOCAL.model is None:
             raise
-        text, engine = LOCAL.transcribe(audio, cfg), "local (cloud failed)"
+        text, engine = LOCAL.transcribe(audio, cfg, hints), "local (cloud failed)"
     return text, engine

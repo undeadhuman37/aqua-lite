@@ -215,6 +215,41 @@ def check_new_features():
     assert whats_new(VERSION)[1], "CHANGELOG.md has no entry for this version"
 
 
+def check_learning():
+    se = textproc.style_edit
+    assert se("Hey, I'm going to be late.", "hey im gonna be late") == ("Hey, I'm going to be late.", "hey im gonna be late")
+    assert se("See you at 5:30 PM.", "See you at 5:30pm") == ("See you at 5:30 PM.", "See you at 5:30pm")
+    assert se("Hey, how are you?", "hey, how are you?")                               # case-only style counts
+    assert se("Late. ", "Late. Also bring the charger") is None                          # kept typing after it
+    assert se("Launch on Friday.", "Quick note: Launch on Friday.") is None              # typed before it
+    assert se("Send it to Patrisio.", "Send it to Patricio.") is None                    # a name: dictionary's job
+    assert se("Thanks for the update.", "Completely different message about lunch plans") is None
+    assert se("Hello  world.", "Hello world.") is None and se("Same.", "Same.") is None
+    from . import learn
+    t, got = [0.0], []
+    d = "Hey, I'm going to be late. "
+    states = [(0, d), (3, "hey im gonna be late "), (10, "")]
+    read = lambda: [x for at, x in states if t[0] >= at][-1]
+    w = learn.CorrectionWatcher(d, read, lambda: 1, lambda _w: None, clock=lambda: t[0],
+                                sleep=lambda secs: t.__setitem__(0, t[0] + secs), on_edited=lambda a, b: got.append((a, b)))
+    w.run()
+    assert got and se(*got[-1]) == ("Hey, I'm going to be late.", "hey im gonna be late"), got
+    from . import context, llm
+    assert context.assemble(["Patricio", "Patricio: are the samples in?", "  ", "Patricio: are the samples in?",
+                             "Yes, Huilin sent them"]) == "Patricio: are the samples in?\nYes, Huilin sent them"
+    names = context.hint_names("Patricio: did Huilin ship? Yes. Ask Patricio about the DHL tracking")
+    assert names[:3] == ["DHL", "Patricio", "Huilin"] and "Yes" not in names and "Ask" not in names, names
+    cfg = {"context_blocked_apps": ["bitwarden"]}
+    assert context.allowed("whatsapp", "Chat", cfg) and not context.allowed("Bitwarden", "", cfg)
+    assert not context.allowed("chrome", "New Tab - InPrivate", cfg) and not context.allowed("pythonw", "", cfg)
+    ctx = {"app": "WhatsApp", "examples": [("Okay, see you.", "ok see u")], "screen": "Sara: lunch?", "draft": "so "}
+    x = llm._extras(ctx)
+    assert "ok see u" in x and "Sara: lunch?" in x and "so " in x and "never reply" in x
+    xc = llm._extras(ctx, command=True)
+    assert "ok see u" not in xc and "Sara: lunch?" in xc and llm._extras({"app": "x"}) == ""
+    assert stt.vocab_prompt({"dictionary": ["Patricio"]}, ["patricio", "Huilin"]) == "Patricio, Huilin."
+
+
 def check_report():
     from . import report
     r = report.redact
@@ -240,7 +275,7 @@ def main():
     for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
-                     ("problem report", check_report)):
+                     ("learning & screen context", check_learning), ("problem report", check_report)):
         fn()
         print(f"ok  {name}")
     if sys.platform == "win32":

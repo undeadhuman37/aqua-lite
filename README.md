@@ -16,6 +16,8 @@ It is not affiliated with or endorsed by Wispr AI, Inc.
 - **Push-to-talk and hands-free:** hold `Ctrl + Win`, or tap it twice (or add `Space`) to keep listening. Hands-free finishes by itself after 8 seconds of silence. The Flow bar stays out of the way and only appears while you're dictating.
 - **Live words:** see what you're saying in a small bubble above the bar as you talk.
 - **Learns your corrections:** fix a word right after dictating ("Patrisio" to "Patricio") and it goes into your dictionary.
+- **Learns how you write:** reword what it typed (lowercase, no full stops, "5:30pm" instead of "5:30 PM") and it remembers, so the next dictations already come out your way.
+- **Understands the conversation (optional):** reads the chat you're replying to, so names, topic and tone fit. In Command Mode, say "reply to this saying I'm in" with nothing selected.
 - **"Press enter":** end a dictation with "press enter" or "send it" and the message is sent after it's typed.
 - **Undo:** `Alt + Shift + X` removes the text of your last dictation.
 - **Command Mode:** select text, hold `Ctrl + Win + Alt`, and say "make this formal", "translate to Arabic" or "turn this into bullets".
@@ -76,10 +78,19 @@ Aqua Lite has no account, no analytics and no telemetry. It only talks to the in
 
 **Live words** run on a small offline model on your PC, never a cloud service. **Learning from corrections** reads
 the text box you just dictated into (through Windows UI Automation, the accessibility API) for up to 45 seconds,
-only to spot words you fixed. It never reads password boxes, and nothing leaves your PC. Both can be turned off in Settings.
+only to spot what you changed. Fixed words go into your dictionary; reworded dictations are kept as before/after
+examples in your local history and the last few are included in the AI formatting request, so it follows your style.
+It never reads password boxes. Turn it off, or clear what it learned, in **Settings > Style**.
+
+**Understanding the conversation** is **off** unless you turn it on in **Settings > Style**. When it's on and you start
+talking, Aqua Lite reads the text that's visible in the app you're dictating into (the chat or email thread) and sends it
+to your AI provider along with the dictation, and names from it go to the speech model as spelling hints. It's never
+saved or logged. It never reads password boxes, private/incognito browser windows, or the apps you list under
+**Never read these apps** (password managers and Windows sign-in prompts are listed already).
 
 In offline mode nothing leaves your PC. With a cloud provider, only the recording and the formatting request
-(your dictionary plus the current app name and window title) go to that provider, using your own API key.
+(your dictionary, the current app name and window title, your recent learned edits, and the on-screen conversation if
+you turned that on) go to that provider, using your own API key.
 Settings and history are stored locally in `%APPDATA%\AquaLite`.
 
 ## Code signing policy

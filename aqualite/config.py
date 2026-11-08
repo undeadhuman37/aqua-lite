@@ -116,6 +116,10 @@ DEFAULTS = {
     "live_preview": True,                # show your words in the bar while you talk
     "live_preview_model": "base",        # small fast offline model used only for the preview
     "learn_corrections": True,           # add words you fix right after dictating to the dictionary
+    "learn_style": True,                 # remember how you reword dictations (kept on this PC) and show the AI
+    "screen_context": False,             # read the conversation on screen so names/topic/tone fit (sent to the AI)
+    "context_blocked_apps": ["1password", "bitwarden", "keepass", "keepassxc", "lastpass", "dashlane", "enpass",
+                             "keeper", "mstsc", "credentialuibroker", "consent", "logonui"],
     "last_seen_version": "",
     "auto_update": True,                 # check GitHub for a newer version every time Aqua Lite starts
     "first_run": True,

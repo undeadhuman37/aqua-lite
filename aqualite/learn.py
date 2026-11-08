@@ -1,5 +1,7 @@
 """Learn from corrections: after a dictation is typed, watch the text box for a little while. If you fix a word
 Aqua Lite got wrong ('Patrisio' -> 'Patricio'), that word goes into your dictionary so it's right next time.
+If you reword it (punctuation, phrasing, formatting), that before/after pair is kept so the AI can follow your
+preferences next time (see textproc.style_edit and history.add_correction).
 
 Reads the focused text box through Windows UI Automation (the accessibility API screen readers use).
 Everything stays on this PC. Password boxes are never read.
@@ -45,9 +47,10 @@ def locate(text, before, after, length):
 class CorrectionWatcher:
     """read() -> current text of the focused box (or None); window() -> id of the foreground window."""
 
-    def __init__(self, dictated, read, window, on_learned, known=(), clock=time.monotonic, sleep=time.sleep):
+    def __init__(self, dictated, read, window, on_learned, known=(), clock=time.monotonic, sleep=time.sleep,
+                 on_edited=None):
         self.dictated = dictated.strip()
-        self.read, self.window, self.on_learned = read, window, on_learned
+        self.read, self.window, self.on_learned, self.on_edited = read, window, on_learned, on_edited
         self.known = {w.lower() for w in known}
         self.clock, self.sleep = clock, sleep
         self.stopped = threading.Event()
@@ -67,6 +70,7 @@ class CorrectionWatcher:
         before = base[max(0, idx - CONTEXT):idx]
         after = base[idx + len(self.dictated):idx + len(self.dictated) + CONTEXT]
         confirmed, cand, since = [], [], self.clock()
+        kept, region_now, region_since = None, self.dictated, self.clock()   # the edit, once it has settled
         end = self.clock() + WATCH_SECS
         while self.clock() < end and not self.stopped.is_set():
             self.sleep(POLL_SECS)
@@ -76,6 +80,10 @@ class CorrectionWatcher:
             if text is None:
                 break
             region = locate(text, before, after, len(self.dictated))
+            if region is not None and region != region_now:
+                if self.clock() - region_since >= STABLE_SECS:
+                    kept = region_now
+                region_now, region_since = region, self.clock()
             new = textproc.learned_words(self.dictated, region) if region is not None else None
             if new != cand:
                 if cand is not None and self.clock() - since >= STABLE_SECS:
@@ -83,9 +91,13 @@ class CorrectionWatcher:
                 cand, since = new, self.clock()
         if cand is not None and self.clock() - since >= STABLE_SECS:
             confirmed = cand
+        if self.clock() - region_since >= STABLE_SECS:
+            kept = region_now
         words = [w for w in (confirmed or []) if w.lower() not in self.known]
         if words and not self.stopped.is_set():
             self.on_learned(words)
+        if self.on_edited and kept and kept.strip() != self.dictated and not self.stopped.is_set():
+            self.on_edited(self.dictated, kept)
         return words
 
 
@@ -125,23 +137,25 @@ def make_reader(U, uia):
 class Learner:
     """One watcher at a time; a new dictation (or undo) replaces the previous one."""
 
-    def __init__(self, on_learned):
-        self.on_learned = on_learned
+    def __init__(self, on_learned, on_edited=None):
+        self.on_learned, self.on_edited = on_learned, on_edited
         self.current = None
         self.disabled = False
 
-    def watch(self, dictated, known):
+    def watch(self, dictated, known, edits=False, words=True):
+        """words: learn misheard words for the dictionary. edits: also report the user's settled edit of the whole
+        dictation (to learn their phrasing)."""
         self.stop()
-        if self.disabled or sys.platform != "win32":
+        if self.disabled or sys.platform != "win32" or not (words or edits):
             return
-        threading.Thread(target=self._run, args=(dictated, known), daemon=True, name="learn").start()
+        threading.Thread(target=self._run, args=(dictated, known, edits, words), daemon=True, name="learn").start()
 
     def stop(self):
         if self.current:
             self.current.stop()
             self.current = None
 
-    def _run(self, dictated, known):
+    def _run(self, dictated, known, edits=False, words=True):
         try:
             comtypes, U, uia = _uia()
         except ImportError:
@@ -153,7 +167,8 @@ class Learner:
             return
         from . import winapi
         w = CorrectionWatcher(dictated, make_reader(U, uia), lambda: winapi.user32.GetForegroundWindow(),
-                              self.on_learned, known)
+                              self.on_learned if words else (lambda _w: None), known,
+                              on_edited=self.on_edited if edits else None)
         self.current = w
         try:
             w.run()
