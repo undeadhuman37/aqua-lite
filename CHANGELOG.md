@@ -3,13 +3,14 @@
 Headings are `## <version>` or `## <version> - <update name>`. The first line under each heading is what the app
 shows once after updating (keep it under 52 characters).
 
-## 1.3.2
-smoother Flow bar and sharper text
-- The Flow bar now runs at your monitor's full refresh rate (60, 144, 240 Hz and up), with every frame
-  timed to land exactly when the screen refreshes.
-- Sharper, cleaner text on the bar, with a soft shadow instead of a rough one.
-- The waveform glides smoothly instead of jumping, and the bars no longer flicker on every sound.
-- The bar fades between states (listening, thinking, done) instead of snapping, and the live-words bubble fades in and out.
+## 1.4.0 - High Hertz Update
+silky Flow bar at your monitor's full refresh rate
+- **Runs at your monitor's refresh rate:** 60, 144, 240, 360 Hz and up. Every frame is timed to land exactly
+  when your screen refreshes, so motion stays smooth on any display.
+- **Draws about 3x faster,** so even 240 and 360 Hz screens get a fresh frame on (almost) every refresh.
+- **Sharper text** on the bar, with a soft shadow instead of a rough one.
+- **The waveform glides** instead of jumping, and the bars no longer flicker on every sound.
+- **Smooth fades** between listening, thinking and done, and the live-words bubble fades in and out.
 
 ## 1.3.1
 new app icon and a "Report a problem" button

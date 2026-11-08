@@ -260,7 +260,7 @@ class FlowBarRenderer:
         steps = [lambda st=st: self._warm(st) for st in ("recording", "locked", "command", "processing", "idle")]
         y0 = self._box(184, 42)[1]
         for w in sorted({min(self.W - 16, k * 32 + 24) for k in range(1, 14)}):
-            steps.append(lambda w=w: self._cap_glass(w, 24, y0))
+            steps.append(lambda w=w: self._cap_img(w, 24, y0))
         return steps
 
     def _warm(self, state):
@@ -268,8 +268,42 @@ class FlowBarRenderer:
         self.render(state, "", [0.0] * (BARS + 1), 0.0)
         self.last_t, self.bubbles.items = saved
 
+    # ------------------------------------------------------------ static / moving split
+    def _flat(self, base, over):
+        """Glass with its gloss, downsampled once: everything that never moves, ready to copy each frame."""
+        return Image.alpha_composite(base, over).reduce(SS)
+
+    def _live(self, key, box, base, over, margin):
+        """Only the patch around the capsule changes from frame to frame. Cache that patch's glass (2x) and the
+        whole still frame (1x), so each frame redraws and shrinks just the patch instead of the full canvas."""
+        ck = ("live", key)
+        if ck not in self.cache:
+            W, H = self.big
+            x0, y0, x1, y1 = box
+            r = (max(0, (x0 - margin) // SS * SS), max(0, (y0 - margin) // SS * SS),
+                 min(W, -(-(x1 + margin) // SS) * SS), min(H, -(-(y1 + margin) // SS) * SS))
+            self.cache[ck] = (r, base.crop(r), over.crop(r), self._flat(base, over))
+        return self.cache[ck]
+
+    def _compose(self, live, patch):
+        r, _b, _o, still = live
+        img = still.copy()
+        img.paste(patch.reduce(SS), (r[0] // SS, r[1] // SS))
+        return img
+
+    def _cap_img(self, w, h, above_y):
+        """The caption bubble, already downsampled and cropped to itself, plus where it goes."""
+        key = ("capimg", w)
+        if key not in self.cache:
+            box, base, over = self._cap_glass(w, h, above_y)
+            flat = self._flat(base, over)
+            bb = flat.getbbox() or (0, 0, 1, 1)
+            self.cache[key] = (box, flat.crop(bb), bb[:2])
+        return self.cache[key]
+
     def _caption(self, img, text, above_y, alpha=1.0):
-        """A small glass bubble above the bar with the newest words of what you're saying (alpha < 1 fades it)."""
+        """A small glass bubble above the bar with the newest words of what you're saying (alpha < 1 fades it).
+        `img` is the final-size frame."""
         maxw = (self.W - 40) * self.scale
         words = (text or "").split()
         shown = shape_for_display(" ".join(words), self.small)
@@ -280,20 +314,15 @@ class FlowBarRenderer:
             return
         tw = self.small.getlength(shown) / self.scale
         w = min(self.W - 16, int(tw / 32 + 1) * 32 + 24)  # widths in steps, so only a few bubble sizes get cached
-        h = 24
-        box, base, over = self._cap_glass(w, h, above_y)
-        target = img if alpha >= 1 else Image.new("RGBA", self.big, (0, 0, 0, 0))
-        target.alpha_composite(base)
-        target.alpha_composite(over)
+        box, bubble, pos = self._cap_img(w, 24, above_y)
+        if alpha < 1:
+            bubble = bubble.copy()
+            bubble.putalpha(bubble.getchannel("A").point(lambda v: int(v * alpha + 0.5)))
+        img.alpha_composite(bubble, pos)
         self._text(shown, self.small, "dark", (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, "mm", alpha)
-        if target is not img:
-            target.putalpha(target.getchannel("A").point(lambda v: int(v * alpha + 0.5)))
-            img.alpha_composite(target)
 
-    def _down(self, img):
-        """Supersampled canvas -> final size (a plain 2x2 average: smooth edges, far quicker than Lanczos),
-        then the words go on top at full sharpness."""
-        img = img.reduce(SS) if img.size == self.big and SS > 1 else img.resize(self.size, Image.LANCZOS)
+    def _finish(self, img):
+        """The words go on top of the final-size frame at full sharpness."""
         for text, font, style, x, y, anchor, alpha in self.texts:
             key = (text, font.size, style, anchor)
             if key not in self.text_cache:
@@ -346,15 +375,21 @@ class FlowBarRenderer:
         if state == "idle":
             if "idle_img" not in self.cache:
                 box, base, over = self._glass("idle", 60, 15)
-                self.cache["idle_img"] = self._down(Image.alpha_composite(base, over))
+                self.cache["idle_img"] = self._flat(base, over)
             return self.cache["idle_img"].copy()
         if state in ("recording", "locked", "command"):
             wide = state != "recording"
             w = 258 if wide else 184
             glow = (170, 120, 255) if state == "command" else (90, 230, 255)
             box, base, over = self._glass(("rec", state), w, 42, glow=glow)
-            img = base.copy()
             x0, y0, x1, y1 = box
+            cy = (y0 + y1) // 2
+            orb_r, orb_x = self._u(9), x0 + self._u(22)
+            half = int(orb_r * 3.8)   # the pulsing glow reaches this far around the orb
+            live = self._live(("rec", state), box, base, over,
+                              max(SS * 2, half - (orb_x - x0), half - (y1 - y0) // 2) + SS)
+            (rx, ry, _rx1, _ry1), patch_base, patch_over, _still = live
+            img = patch_base.copy()               # everything below is drawn in patch coordinates
             lv = levels[-1] if levels else 0.0
             self.bubbles.step(box, lv, dt)
             layer = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
@@ -363,49 +398,56 @@ class FlowBarRenderer:
             if mkey not in self.cache:
                 self.cache[mkey] = capsule_mask(self.big, box, (box[3] - box[1]) // 2).crop(box)
             layer.putalpha(ImageChops.multiply(layer.getchannel("A"), self.cache[mkey]))
-            img.alpha_composite(layer, (x0, y0))
-            cy = (y0 + y1) // 2
+            img.alpha_composite(layer, (x0 - rx, y0 - ry))
             pulse = 0.5 + 0.5 * math.sin(t * 6.67)
-            orb(img, x0 + self._u(22), cy, self._u(9), ORB["command" if state == "command" else "recording"], pulse)
-            img.alpha_composite(self._bars(box, list(levels), phase), (x0, y0))
-            d = ImageDraw.Draw(img)
+            orb(img, orb_x - rx, cy - ry, orb_r, ORB["command" if state == "command" else "recording"], pulse)
+            img.alpha_composite(self._bars(box, list(levels), phase), (x0 - rx, y0 - ry))
             if wide:
                 tag = "Command" if state == "command" else "Hands-free"
                 tx = x0 + self._u(42) + BARS * self._u(7) + self._u(6)
                 self._text(tag, self.small, "light", tx, cy, "lm")
-                orb(img, x1 - self._u(22), cy, self._u(8), ((255, 255, 255), (150, 200, 230)))
-                d = ImageDraw.Draw(img)
+                sx = x1 - self._u(22) - rx
+                orb(img, sx, cy - ry, self._u(8), ((255, 255, 255), (150, 200, 230)))
                 s = self._u(3.2)
-                d.rounded_rectangle((x1 - self._u(22) - s, cy - s, x1 - self._u(22) + s, cy + s), radius=SS,
-                                    fill=(20, 90, 150, 230))
-            img.alpha_composite(over)
+                ImageDraw.Draw(img).rounded_rectangle((sx - s, cy - ry - s, sx + s, cy - ry + s), radius=SS,
+                                                      fill=(20, 90, 150, 230))
+            img.alpha_composite(patch_over)
+            out = self._compose(live, img)
             if caption and caption_alpha > 0:
-                self._caption(img, caption, y0, min(caption_alpha, 1.0))
-            return self._down(img)
+                self._caption(out, caption, y0, min(caption_alpha, 1.0))
+            return self._finish(out)
         if state == "processing":
             box, base, over = self._glass("proc", 100, 36, glow=(90, 230, 255))
-            img = base.copy()
             x0, y0, x1, y1 = box
             cy = (y0 + y1) // 2
+            live = self._live("proc", box, base, over, SS * 3)
+            (rx, ry, _rx1, _ry1), patch_base, patch_over, _still = live
+            img = patch_base.copy()
             for i in range(3):
                 ph = t * 6.0 - i * 0.9
                 dy = -abs(math.sin(ph)) * self._u(6)
-                orb(img, (x0 + x1) // 2 + (i - 1) * self._u(18), cy + self._u(2) + dy, self._u(5.5),
+                orb(img, (x0 + x1) // 2 + (i - 1) * self._u(18) - rx, cy + self._u(2) + dy - ry, self._u(5.5),
                     ((255, 255, 255), (120, 210, 255)))
-            img.alpha_composite(over)
-            return self._down(img)
-        # toast
+            img.alpha_composite(patch_over)
+            return self._compose(live, img)
+        # toast: nothing in it moves, so the finished picture is kept and reused while it slides / fades
         text = label[:64]
-        tw = self.font.getlength(text) / self.scale
-        w = min(self.W - 16, int(tw) + 64)
-        box, base, over = self._glass(("toast", w), w, 36)
-        img = base.copy()
-        x0, y0, x1, y1 = box
-        cy = (y0 + y1) // 2
-        orb(img, x0 + self._u(18), cy, self._u(6.5), ORB.get(kind, ORB["info"]))
-        img.alpha_composite(over)
-        self._text(text, self.font, "light", x0 + self._u(32), cy, "lm")
-        return self._down(img)
+        key = ("toastimg", text, kind)
+        if key not in self.cache:
+            tw = self.font.getlength(text) / self.scale
+            w = min(self.W - 16, int(tw) + 64)
+            box, base, over = self._glass(("toast", w), w, 36)
+            img = base.copy()
+            x0, y0, x1, y1 = box
+            cy = (y0 + y1) // 2
+            orb(img, x0 + self._u(18), cy, self._u(6.5), ORB.get(kind, ORB["info"]))
+            img.alpha_composite(over)
+            self._text(text, self.font, "light", x0 + self._u(32), cy, "lm")
+            old = [k for k in self.cache if k[0] == "toastimg"]
+            for k in old[:-7]:  # keep the last few toasts only
+                del self.cache[k]
+            self.cache[key] = self._finish(img.reduce(SS))
+        return self.cache[key].copy()
 
 
 def crossfade(a, b, t):
