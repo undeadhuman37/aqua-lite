@@ -1,5 +1,5 @@
 """Learn from corrections: after a dictation is typed, watch the text box for a little while. If you fix a word
-Aqua Lite got wrong ('Patrisio' -> 'Patricio'), that word goes into your dictionary so it's right next time.
+Aqua Lite got wrong ('Kaitlin' -> 'Kaitlyn'), that word goes into your dictionary so it's right next time.
 If you reword it (punctuation, phrasing, formatting), that before/after pair is kept so the AI can follow your
 preferences next time (see textproc.style_edit and history.add_correction).
 

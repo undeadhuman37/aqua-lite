@@ -15,7 +15,7 @@ It is not affiliated with or endorsed by Wispr AI, Inc.
 
 - **Push-to-talk and hands-free:** hold `Ctrl + Win`, or tap it twice (or add `Space`) to keep listening. Hands-free finishes by itself after 8 seconds of silence. The Flow bar stays out of the way and only appears while you're dictating.
 - **Live words:** see what you're saying in a small bubble above the bar as you talk.
-- **Learns your corrections:** fix a word right after dictating ("Patrisio" to "Patricio") and it goes into your dictionary.
+- **Learns your corrections:** fix a word right after dictating ("Kaitlin" to "Kaitlyn") and it goes into your dictionary.
 - **Learns how you write:** reword what it typed (lowercase, no full stops, "5:30pm" instead of "5:30 PM") and it remembers, so the next dictations already come out your way.
 - **Understands the conversation (optional):** reads the chat you're replying to, so names, topic and tone fit. In Command Mode, say "reply to this saying I'm in" with nothing selected.
 - **"Press enter":** end a dictation with "press enter" or "send it" and the message is sent after it's typed.

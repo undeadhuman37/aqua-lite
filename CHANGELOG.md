@@ -30,7 +30,7 @@ new app icon and a "Report a problem" button
 ## 1.3.0 - Quality of Life Update
 live words, learns your fixes, undo & more
 - **Live words:** see what you're saying in a small bubble above the bar while you talk (offline preview model, no API calls).
-- **Learns your corrections:** fix a word right after dictating ("Patrisio" to "Patricio") and it's added to your dictionary.
+- **Learns your corrections:** fix a word right after dictating ("Kaitlin" to "Kaitlyn") and it's added to your dictionary.
 - **Say "press enter" or "send it"** at the end of a dictation to send the message after it's typed.
 - **Double-tap `Ctrl + Win`** for hands-free.
 - **Hands-free stops by itself** after 8 seconds of silence (change it in Settings).

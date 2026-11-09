@@ -184,7 +184,7 @@ def _ratio(a, b):
 
 def learned_words(dictated, edited):
     """Compare what Aqua Lite typed with what the user turned it into. Returns words worth adding to the
-    dictionary: one-for-one swaps that look like a mis-heard name or term ('Patrisio' -> 'Patricio'),
+    dictionary: one-for-one swaps that look like a mis-heard name or term ('Kaitlin' -> 'Kaitlyn'),
     not rewrites ('meeting' -> 'call')."""
     import difflib
     a, b = _WORD.findall(dictated or ""), _WORD.findall(edited or "")
@@ -202,7 +202,7 @@ def learned_words(dictated, edited):
             continue  # just spacing/joining
         if _ratio(old, new) >= 0.5:
             out.append(new)
-    # case-only fixes: 'patricio' -> 'Patricio', 'api' -> 'API' (names, brands, acronyms) - but not
+    # case-only fixes: 'kaitlyn' -> 'Kaitlyn', 'api' -> 'API' (names, brands, acronyms) - but not
     # capitalising the first word of a sentence, and not lower-casing
     if len(a) == len(b):
         starts = {m.start() for m in _WORD.finditer(edited)}
@@ -256,7 +256,7 @@ def style_edit(dictated, edited, max_len=500):
                      and not any(t[0].lower() == u[0].lower() for t in a[i1:i2] for u in b[j1:j2])
                      for op, i1, i2, j1, j2 in changes)
     if names_only:
-        return None           # 'Patrisio' -> 'Patricio': a dictionary word, already learned
+        return None           # 'Kaitlin' -> 'Kaitlyn': a dictionary word, already learned
     if len(a_txt) > max_len or len(b_txt) > max_len:
         return None
     return a_txt, b_txt

@@ -209,15 +209,15 @@ def check_new_features():
     assert se("Please review and send it.") == ("Please review and send it.", False)
     assert se("مرحبا. اضغط انتر") == ("مرحبا.", True)
     lw = textproc.learned_words
-    assert lw("Tell Patrisio hi.", "Tell Patricio hi.") == ["Patricio"] and lw("the api is down", "the API is down") == ["API"]
+    assert lw("Tell Kaitlin hi.", "Tell Kaitlyn hi.") == ["Kaitlyn"] and lw("the api is down", "the API is down") == ["API"]
     assert lw("have a meeting", "have a call") == [] and lw("hello there", "Hello there") == []
     from . import learn, live
     t = [0.0]
-    d, states = "Tell Patrisio hi. ", [(0, "Hey! Tell Patrisio hi. "), (3, "Hey! Tell Patricio hi. "), (8, "")]
+    d, states = "Tell Kaitlin hi. ", [(0, "Hey! Tell Kaitlin hi. "), (3, "Hey! Tell Kaitlyn hi. "), (8, "")]
     read = lambda: [x for at, x in states if t[0] >= at][-1]
     w = learn.CorrectionWatcher(d, read, lambda: 1, lambda _w: None, clock=lambda: t[0],
                                 sleep=lambda secs: t.__setitem__(0, t[0] + secs))
-    assert w.run() == ["Patricio"]
+    assert w.run() == ["Kaitlyn"]
     assert live.tidy("Thanks for watching!", False) == "" and live.tidy("lo there friend", True) == "there friend"
     from .config import VERSION, whats_new
     assert whats_new(VERSION)[1], "CHANGELOG.md has no entry for this version"
@@ -230,7 +230,7 @@ def check_learning():
     assert se("Hey, how are you?", "hey, how are you?")                               # case-only style counts
     assert se("Late. ", "Late. Also bring the charger") is None                          # kept typing after it
     assert se("Launch on Friday.", "Quick note: Launch on Friday.") is None              # typed before it
-    assert se("Send it to Patrisio.", "Send it to Patricio.") is None                    # a name: dictionary's job
+    assert se("Send it to Kaitlin.", "Send it to Kaitlyn.") is None                    # a name: dictionary's job
     assert se("Thanks for the update.", "Completely different message about lunch plans") is None
     assert se("Hello  world.", "Hello world.") is None and se("Same.", "Same.") is None
     from . import learn
@@ -243,10 +243,10 @@ def check_learning():
     w.run()
     assert got and se(*got[-1]) == ("Hey, I'm going to be late.", "hey im gonna be late"), got
     from . import context, llm
-    assert context.assemble(["Patricio", "Patricio: are the samples in?", "  ", "Patricio: are the samples in?",
-                             "Yes, Huilin sent them"]) == "Patricio: are the samples in?\nYes, Huilin sent them"
-    names = context.hint_names("Patricio: did Huilin ship? Yes. Ask Patricio about the DHL tracking")
-    assert names[:3] == ["DHL", "Patricio", "Huilin"] and "Yes" not in names and "Ask" not in names, names
+    assert context.assemble(["Kaitlyn", "Kaitlyn: are the samples in?", "  ", "Kaitlyn: are the samples in?",
+                             "Yes, Marco sent them"]) == "Kaitlyn: are the samples in?\nYes, Marco sent them"
+    names = context.hint_names("Kaitlyn: did Marco ship? Yes. Ask Kaitlyn about the DHL tracking")
+    assert names[:3] == ["DHL", "Kaitlyn", "Marco"] and "Yes" not in names and "Ask" not in names, names
     cfg = {"context_blocked_apps": ["bitwarden"]}
     assert context.allowed("whatsapp", "Chat", cfg) and not context.allowed("Bitwarden", "", cfg)
     assert not context.allowed("chrome", "New Tab - InPrivate", cfg) and not context.allowed("pythonw", "", cfg)
@@ -255,21 +255,21 @@ def check_learning():
     assert "ok see u" in x and "Sara: lunch?" in x and "so " in x and "never reply" in x
     xc = llm._extras(ctx, command=True)
     assert "ok see u" not in xc and "Sara: lunch?" in xc and llm._extras({"app": "x"}) == ""
-    assert stt.vocab_prompt({"dictionary": ["Patricio"]}, ["patricio", "Huilin"]) == "Patricio, Huilin."
+    assert stt.vocab_prompt({"dictionary": ["Kaitlyn"]}, ["kaitlyn", "Marco"]) == "Kaitlyn, Marco."
 
 
 def check_instant():
     from . import instant
     a = instant.Agreement()
     w = lambda t, s: (" " + t, s, s + 0.3)
-    assert a.insert([w("Hey", 0.1), w("Patrisio", 0.5)]) == []                     # first pass: nothing is sure yet
-    assert [x[0] for x in a.insert([w("hey", 0.1), w("Patricio", 0.5), w("the", 0.9)])] == [" Hey"]  # keeps on-screen form
-    assert [x[0] for x in a.insert([w("Hey", 0.1), w("Patricio,", 0.5), w("the", 0.9)])] == [" Patricio", " the"]
+    assert a.insert([w("Hey", 0.1), w("Kaitlin", 0.5)]) == []                     # first pass: nothing is sure yet
+    assert [x[0] for x in a.insert([w("hey", 0.1), w("Kaitlyn", 0.5), w("the", 0.9)])] == [" Hey"]  # keeps on-screen form
+    assert [x[0] for x in a.insert([w("Hey", 0.1), w("Kaitlyn,", 0.5), w("the", 0.9)])] == [" Kaitlyn", " the"]
     assert a.insert([w("the", 0.92), w("samples", 1.3)]) == []                     # re-heard 'the' isn't doubled
     assert [x[0] for x in a.insert([w("samples", 1.31), w("arrived", 1.7)])] == [" samples"]
-    assert a.text() == "Hey Patricio the samples"
+    assert a.text() == "Hey Kaitlyn the samples"
     # word by word: guesses go in at once and get fixed when re-heard, only after checking the box
-    box, words = ["Re: "], [[("Hey", 0.1, 0.4), ("Patrisio", 0.5, 0.9)], [("Hey", 0.1, 0.4), ("Patricio", 0.5, 0.9)]]
+    box, words = ["Re: "], [[("Hey", 0.1, 0.4), ("Kaitlin", 0.5, 0.9)], [("Hey", 0.1, 0.4), ("Kaitlyn", 0.5, 0.9)]]
 
     class Rec:
         duration, speech_frames = 2.0, 1
@@ -290,12 +290,12 @@ def check_instant():
         return True
     st = instant.Streamer(Rec(), {}, Model(), typer, delete_fn=eraser, check=lambda t: box[0].endswith(t))
     st.step()
-    assert box[0] == "Re: Hey Patrisio"
+    assert box[0] == "Re: Hey Kaitlin"
     st.step()
-    assert box[0] == "Re: Hey Patricio" and st.typed == "Hey Patricio"
+    assert box[0] == "Re: Hey Kaitlyn" and st.typed == "Hey Kaitlyn"
     assert instant.common_prefix("abc", "abd") == 2
-    dg = instant.DeepgramStreamer(Rec(), {"dictionary": ["Huilin"], "language": "ar"}, "k", typer).params()
-    assert "model=nova-3" in dg and "language=ar" in dg and "keyterm=Huilin" in dg and "encoding=linear16" in dg
+    dg = instant.DeepgramStreamer(Rec(), {"dictionary": ["Marco"], "language": "ar"}, "k", typer).params()
+    assert "model=nova-3" in dg and "language=ar" in dg and "keyterm=Marco" in dg and "encoding=linear16" in dg
     from . import gpu
     assert isinstance(gpu.lib_dirs(), list) and gpu.MODEL == "large-v3-turbo"
     assert gpu.recommend(2048) == "small" and gpu.recommend(8192) == "large-v3-turbo" and gpu.recommend(0) == gpu.MODEL
@@ -460,12 +460,12 @@ def check_report():
     r = report.redact
     assert r("dictation 2.1s audio, 0.9s, groq [personal] -> ctrl+v | text='call mom at 6 '").endswith("| text=[removed]")
     assert r("INFO dictation 1.0s audio, 0.5s, local [other] -> ctrl+v: 'secret words'").endswith(": [removed]")
-    assert r("learned from a correction | text=['Patricio']").endswith("text=[removed]")
-    assert r("learned from a correction: ['Patricio']").endswith(": [removed]")
+    assert r("learned from a correction | text=['Kaitlyn']").endswith("text=[removed]")
+    assert r("learned from a correction: ['Kaitlyn']").endswith(": [removed]")
     assert "gsk_" not in r("auth failed for gsk_abcdefghijklmnop1234")
     assert r("update: installed 1.3.1, GitHub 1.3.1 (abc1234)") == "update: installed 1.3.1, GitHub 1.3.1 (abc1234)"
-    text = report.build({"groq_api_key": "gsk_secretsecret", "dictionary": ["Patricio"], "language": "auto"}, {"x": 1})
-    assert "gsk_secret" not in text and "Patricio" not in text and "language: auto" in text and "API keys set: groq" in text
+    text = report.build({"groq_api_key": "gsk_secretsecret", "dictionary": ["Kaitlyn"], "language": "auto"}, {"x": 1})
+    assert "gsk_secret" not in text and "Kaitlyn" not in text and "language: auto" in text and "API keys set: groq" in text
 
 
 def check_updater():
