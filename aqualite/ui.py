@@ -58,7 +58,8 @@ HEADINGS = {
     "Home": ("Hold the shortcut, talk, let go", "Your words go wherever your cursor is"),
     "Dictation": ("Dictation", "Shortcuts, microphone and how dictating behaves"),
     "Instant text": ("Instant text", "Words appear while you talk, then the polished version replaces them when you "
-                                     "let go. Only pick an option if you have what it needs."),
+                                     "let go. It's still a bit jittery: words can jump around or get corrected as you "
+                                     "speak. Only pick an option if you have what it needs."),
     "Speech & AI": ("Speech & AI", "The engines that turn your voice into text and tidy it up"),
     "Private mode": ("Private mode", "Your voice and text never leave this PC. No account, no key, works offline."),
     "Style & memory": ("Style & memory", "How you sound in each kind of app, and what Aqua Lite has learned from "

@@ -445,6 +445,73 @@ def text_before_caret(n):
     return None, False
 
 
+def _norm(text):
+    """Text as two apps would agree on it: same line breaks, plain spaces, any case, no trailing space."""
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\u00a0", " ").rstrip().lower()
+
+
+def selected_text():
+    """The selected text in the focused box (UI Automation), or None if it can't be read."""
+    comtypes = None
+    try:
+        from . import learn
+        comtypes, U, uia = learn._uia()
+        el = uia.GetFocusedElement()
+        if not el or el.CurrentIsPassword:
+            return None
+        pat = el.GetCurrentPattern(10014)  # TextPattern
+        if not pat:
+            return None
+        sel = pat.QueryInterface(U.IUIAutomationTextPattern).GetSelection()
+        if not sel or sel.Length <= 0:
+            return None
+        return sel.GetElement(0).GetText(-1) or ""
+    except Exception as e:
+        log.info("instant text: couldn't read the selection: %s", e)
+        return None
+    finally:
+        if comtypes is not None:
+            try:
+                comtypes.CoUninitialize()
+            except Exception:
+                pass
+
+
+def wait_selected(typed, timeout, read=None, clock=time.monotonic, sleep=time.sleep):
+    """After Shift+Left: wait until the app has caught up and `typed` is what's selected, so the paste replaces
+    exactly the live words. Returns True (it matches), "settled" (the selection stopped growing but reads a
+    little differently, e.g. emoji), False (timed out) or None (this box can't be read)."""
+    read = read or selected_text
+    want = _norm(typed)
+    start = clock()
+    last, since = None, start
+    while True:
+        got = read()
+        if got is None:
+            return None
+        got = _norm(got)
+        if got == want:
+            return True
+        now = clock()
+        if got != last:
+            last, since = got, now
+        elif got and now - since >= 0.3:
+            return "settled"
+        if now - start >= timeout:
+            return False
+        sleep(0.03)
+
+
+def pasted(text, read=None):
+    """True once `text` sits right before the cursor in the focused box, False if not (yet), None if the box
+    can't be read."""
+    before, _exact = (read or text_before_caret)(len(text))
+    if before is None:
+        return None
+    want = _norm(text)
+    return not want or _norm(before).endswith(want)
+
+
 def is_password_box():
     comtypes = None
     try:

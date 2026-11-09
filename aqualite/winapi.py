@@ -2,7 +2,8 @@
 
 The paste path copies the rules the teardown proved in Wispr Flow Helper.exe (section 7):
   save clipboard -> write text -> all key-downs, Sleep(50), all key-ups -> wait 50 ms
-  -> restore after 500/3000/5000 ms depending on the app -> skip restore if the clipboard changed.
+  -> restore once the box shows the pasted text (never sooner than 500/3000/5000 ms depending on the app,
+  longer after a long instant-text selection) -> skip restore if the clipboard changed.
 """
 import ctypes
 import os
@@ -391,8 +392,10 @@ def get_text():
 
 
 # ------------------------------------------------------------------ paste / copy
-def paste(text, cfg, target=None, saved=None):
-    """Insert text into the focused app. Returns a dict describing what happened."""
+def paste(text, cfg, target=None, saved=None, queued=0):
+    """Insert text into the focused app. Returns a dict describing what happened.
+    queued: key presses sent just before (instant text selecting its live words) that the app may still be
+    working through when it gets to the Ctrl+V."""
     proc, title, pid = target or foreground()
     keys = textproc.pick_paste_keys(proc, cfg.get("shift_insert_in_editors", False))
     delay = textproc.restore_delay(proc)
@@ -409,11 +412,42 @@ def paste(text, cfg, target=None, saved=None):
         return {"proc": proc, "keys": "none", "delay": 0, "status": "blocked"}
     time.sleep(0.05)  # Wispr: "sleeping for 50 ms for paste to complete"
     if restore_on and saved is not None:
-        def _restore():
-            if sequence() == seq:  # "Clipboard changed since paste, skipping restoration"
-                restore(saved)
-        threading.Timer(delay, _restore).start()
+        budget = restore_budget(delay, queued, len(text))
+        threading.Thread(target=_restore_when_pasted, args=(saved, seq, text, delay, budget), daemon=True,
+                         name="clipboard-restore").start()
     return {"proc": proc, "keys": "+".join(keys), "delay": delay, "status": "ok"}
+
+
+def restore_budget(delay, queued=0, chars=0):
+    """Longest wait before the old clipboard goes back: the app's usual delay, plus time to work through any
+    queued key presses and to take in a long paste."""
+    return delay + min(15.0, 0.01 * queued + 0.0005 * chars)
+
+
+def _restore_when_pasted(saved, seq, text, delay, budget, check=None, sleep=time.sleep, clock=time.monotonic):
+    """Put the old clipboard back only after the app has pasted. An app reads the clipboard when it gets round
+    to the Ctrl+V, and a long dictation can keep it busy: restoring before that pasted the user's old copy
+    instead of their words. Watches the box for the pasted text; if the box can't be read, waits the full
+    budget. Never restores sooner than the app's usual delay, or if something else was copied meanwhile."""
+    if check is None:
+        from . import instant
+        check = instant.pasted
+    start = clock()
+    seen = None
+    while clock() - start < budget:
+        try:
+            seen = check(text)
+        except Exception:
+            seen = None
+        if seen is not False:
+            break
+        sleep(0.05)
+    elapsed = clock() - start
+    sleep(max(0.0, (delay if seen else budget) - elapsed))
+    if sequence() == seq:  # "Clipboard changed since paste, skipping restoration"
+        restore(saved)
+        return True
+    return False
 
 
 def copy_selection(timeout=0.5):

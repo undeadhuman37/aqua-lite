@@ -182,6 +182,14 @@ def check_windows():
     assert winapi.sequence() == seq
     winapi.restore(saved)
     print(f"  clipboard: write/read/restore ok ({len(saved or [])} formats saved)")
+    # the old clipboard must not come back before the app has pasted (long dictations pasted the old copy)
+    assert winapi.restore_budget(0.5, 600, 600) > 5 and winapi.restore_budget(0.5) == 0.5
+    t, waits, answers = [0.0], [], iter([False, False, True])
+    seq = winapi.set_text("Aqua Lite restore test")
+    winapi._restore_when_pasted(saved, seq, "x", 0.5, 5.0, check=lambda _t: next(answers),
+                                sleep=lambda d: (waits.append(d), t.__setitem__(0, t[0] + d)), clock=lambda: t[0])
+    assert t[0] >= 0.5, "restored before the app's usual delay"
+    print("  clipboard: waits for the paste before restoring")
     hook = winapi.KeyboardHook(lambda vk, down: False)
     hook.start()
     hook.ok.wait(3)
@@ -308,6 +316,20 @@ def check_instant():
     assert m.on_key(0xA2, True) is False and m.released_mods == set()               # next press is normal again
 
 
+def check_paste_wait():
+    from . import instant
+    t = [0.0]
+    clk, slp = (lambda: t[0]), (lambda d: t.__setitem__(0, t[0] + d))
+    grow = iter(["H", "He", "Hel", "Hello world"])
+    assert instant.wait_selected("Hello\u00a0world", 5, read=lambda: next(grow), clock=clk, sleep=slp) is True
+    stuck = iter(["Hi", "Hi \U0001f600"] + ["Hi \U0001f600"] * 99)
+    assert instant.wait_selected("Hi :)", 5, read=lambda: next(stuck), clock=clk, sleep=slp) == "settled"
+    assert instant.wait_selected("Hi", 5, read=lambda: None) is None
+    assert instant.pasted("One.\nTwo", read=lambda n: ("x One.\r\nTwo ", True)) is True
+    assert instant.pasted("One", read=lambda n: ("what you had copied", True)) is False
+    assert instant.pasted("One", read=lambda n: (None, False)) is None
+
+
 def check_voice_edit():
     from . import edits
     pa = edits.parse_answer
@@ -398,7 +420,7 @@ def main():
     for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
-                     ("learning & screen context", check_learning), ("instant text", check_instant), ("edit by voice", check_voice_edit),
+                     ("learning & screen context", check_learning), ("instant text", check_instant), ("paste waits for the app", check_paste_wait), ("edit by voice", check_voice_edit),
                      ("private mode", check_private_mode), ("new look", check_look),
                      ("problem report", check_report)):
         fn()

@@ -317,10 +317,15 @@ class App:
                 winapi.set_text(final, private=True)
                 self.post("toast", "Your live words were changed - polished text copied, press Ctrl+V", "warn", 5)
             return {"proc": proc, "keys": "none", "status": "kept"}
-        winapi.select_left(instant.presses(typed))
+        n = instant.presses(typed)
+        winapi.select_left(n)
         time.sleep(0.03)
-        if final.strip():
-            res = winapi.paste(final, cfg, target=target, saved=saved)
+        # a long paragraph is hundreds of Shift+Left presses: wait until the app has selected the live words
+        caught_up = instant.wait_selected(typed, timeout=min(10.0, 0.3 + 0.01 * n))
+        if caught_up is not True:
+            log.info("instant text: selection after %d presses: %s", n, caught_up)
+        if final.strip():   # unless the selection matched, keep the clipboard a good while longer
+            res = winapi.paste(final, cfg, target=target, saved=saved, queued=0 if caught_up is True else n)
         else:
             winapi.tap_key("delete")
             res = {"proc": proc, "keys": "delete", "status": "ok"}
