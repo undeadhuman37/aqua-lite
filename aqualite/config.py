@@ -123,6 +123,7 @@ DEFAULTS = {
     "gpu_model": "auto",                 # graphics-card engine model: auto (picked for the card) or a gpu.MODELS name
     "gpu_idle_minutes": 5,               # free the graphics card after this long without talking (0 = keep loaded)
     "instant_text_model": "auto",        # auto = "small" if this PC is fast enough, else "base"
+    "instant_text_recheck": False,       # when you let go: re-run the whole recording (slower) instead of finishing the tidied text
     "instant_text_skip_apps": [],        # process names to always insert at the end instead (code editors already are)
     "live_preview_model": "base",        # small fast offline model used only for the preview
     "learn_corrections": True,           # add words you fix right after dictating to the dictionary

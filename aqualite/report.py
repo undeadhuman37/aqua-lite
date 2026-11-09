@@ -16,7 +16,8 @@ KEEP_SETTINGS = ("stt_engine", "language", "local_model", "local_device", "ai_pr
                  "hotkey_undo_last", "hotkey_cancel", "double_tap_handsfree", "handsfree_silence_secs",
                  "max_handsfree_minutes", "voice_enter", "live_preview", "live_preview_model", "learn_corrections",
                  "music_enabled", "sounds", "show_idle_bar", "whisper_boost", "add_trailing_space",
-                 "restore_clipboard", "shift_insert_in_editors", "launch_at_startup", "auto_update")
+                 "restore_clipboard", "shift_insert_in_editors", "launch_at_startup", "auto_update",
+                 "instant_text_recheck")
 _TEXT = re.compile(r"(\|\s*text=).*$")
 _OLD_TEXT = re.compile(r"^(.* -> [^:|]*): .*$")          # dictation lines written by versions before 1.3.1
 _OLD_LEARNED = re.compile(r"(learned from a correction: ).*$")

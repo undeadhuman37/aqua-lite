@@ -316,6 +316,53 @@ def check_instant():
     assert m.on_key(0xA2, True) is False and m.released_mods == set()               # next press is normal again
 
 
+def check_sentence_tidy():
+    import threading
+    import time as _t
+    from . import instant
+    assert instant.sentence_ends("Dr. Lee is here. Ok then") == [16]
+    assert instant.is_correction("Actually, make that Thursday.") and not instant.is_correction("I like Thursdays.")
+    box = {"text": ""}
+    lock = threading.Lock()
+
+    def typ(t):
+        with lock:
+            box["text"] += t
+        return True
+
+    def back(n):
+        with lock:
+            box["text"] = box["text"][:-n]
+        return True
+
+    def tidy(raw, before, after, span=None):
+        if raw.lower().startswith("actually"):
+            return ""
+        t = raw.replace("friday", "Thursday" if "thursday" in after.lower() else "Friday")
+        return ". ".join(x[:1].upper() + x[1:] for x in t.split(". "))
+
+    lt = instant.LiveTyper(typ, delete_fn=back, check=lambda t: box["text"].endswith(t))
+    lt.polisher = instant.Polisher(tidy)
+    raw = ""
+    for w in "see you on friday at noon. actually make that thursday. bring the deck please. thanks a lot".split():
+        raw = (raw + " " + w).strip()
+        lt.feed_polisher(raw)
+        lt.show(lt.view(raw))
+        _t.sleep(0.01)
+    end = _t.monotonic() + 3
+    while lt.polisher.segs and lt.polisher.segs[0][1] is None and _t.monotonic() < end:
+        _t.sleep(0.02)
+    lt.show(lt.view(raw))
+    assert box["text"].startswith("See you on Thursday at noon."), box["text"]
+    final = lt.polisher.finish(raw)
+    assert final == "See you on Thursday at noon. Bring the deck please. Thanks a lot", final
+    assert lt.settle(final) and box["text"] == final, box["text"]
+    assert not lt.settle("two\nlines")   # line breaks are pasted, never typed (Enter would send a chat message)
+    spans = [(0, 2, 0.0, 0.3), (3, 6, 0.5, 0.9), (7, 9, 1.5, 1.8), (10, 14, 2.0, 2.4)]   # "hi you. ok then"
+    assert instant.Polisher.span_of(spans, 0, 7) == (0.0, 1.2)       # cut halfway into the pause after "you."
+    assert instant.Polisher.span_of(spans, 7, None) == (1.2, None)
+
+
 def check_paste_wait():
     from . import instant
     t = [0.0]
@@ -420,7 +467,7 @@ def main():
     for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
-                     ("learning & screen context", check_learning), ("instant text", check_instant), ("paste waits for the app", check_paste_wait), ("edit by voice", check_voice_edit),
+                     ("learning & screen context", check_learning), ("instant text", check_instant), ("paste waits for the app", check_paste_wait), ("instant text tidies each sentence", check_sentence_tidy), ("edit by voice", check_voice_edit),
                      ("private mode", check_private_mode), ("new look", check_look),
                      ("problem report", check_report)):
         fn()

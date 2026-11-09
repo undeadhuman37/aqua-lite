@@ -859,8 +859,8 @@ class SettingsWindow:
     INSTANT_ENGINES = [
         ("off", "Off", "Your text appears when you let go, already polished. Works on every PC."),
         ("preview", "Quick preview",
-         "A small speech model on your processor types words as you talk. Fast but rough: expect wrong words until "
-         "you let go and the polished version replaces them. Uses some processor power while you talk."),
+         "A small speech model on your processor types words as you talk. Rough at first: each sentence is heard "
+         "again by your main speech engine and tidied as you finish it. Uses some processor power while you talk."),
         ("gpu", "Graphics card",
          "Needs an NVIDIA graphics card. A Whisper model runs on the card, so the live words are almost the "
          "final text - pick one below (the recommended one fits your card). One-time download: about 1 GB of NVIDIA "
@@ -934,6 +934,12 @@ class SettingsWindow:
                 card.configure(style="PickOn.TFrame" if var.get() == k else "Pick.TFrame")
         var.trace_add("write", mark)
         mark()
+        when = self._card(f, "When you let go", "Each sentence is tidied by the AI as soon as you finish it, so "
+                          "letting go only finishes the last one.")
+        ttk.Checkbutton(when, text="Double-check the whole recording instead (slower, a little more accurate)",
+                        variable=self._var("instant_text_recheck", tk.BooleanVar)).pack(anchor="w")
+        ttk.Label(when, text="Private mode never uses Deepgram: it types with the on-PC engine instead.",
+                  style="Muted.TLabel", wraplength=self.wrap).pack(anchor="w", pady=(s(6), 0))
         self.gpu_job = None
         threading.Thread(target=self._gpu_check, daemon=True).start()
 

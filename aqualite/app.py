@@ -217,6 +217,8 @@ class App:
         """Type words into the focused app while the user talks (see instant.py)."""
         cfg = self.cfg
         engine = cfg.get("instant_text_engine", "off")
+        if engine == "deepgram" and cfg.get("private_mode"):
+            engine = "preview"   # private mode: your voice never leaves this PC, so the on-PC engine types instead
         if not IS_WIN or engine not in ("preview", "gpu", "deepgram"):
             return
         model = None
@@ -278,8 +280,61 @@ class App:
                                           on_error=lambda msg: self.post("toast", msg, "warn", 5), **common)
         else:
             st = instant.Streamer(self.recorder, cfg, model, type_here, **common)
+        if not cfg.get("instant_text_recheck", False):
+            # the quick model's words are rough: hear each sentence again with the main engine before tidying it
+            st.polisher = instant.Polisher(self._live_polish(proc, title, self.grab, rehear=engine == "preview"))
         self.instant = (st, (hwnd, proc, title, pid))
         st.start()
+
+    def _live_polish(self, proc, title, grab, rehear=False):
+        """The tidy function for instant text: one sentence at a time, with the same style, learned edits and
+        screen context as a normal dictation, and the text already written as the box it continues. rehear: run
+        each sentence's audio through the main speech engine first (the quick model's words are rough)."""
+        cfg = self.cfg
+        ctx = {"app": proc, "title": title, "category": textproc.app_category(proc, title)}
+        if cfg.get("learn_style", True):
+            try:
+                ctx["profile"] = memory.for_kind(ctx["category"])
+                ctx["examples"] = history.corrections_for(ctx["category"], 4 if ctx["profile"] else 6)
+            except Exception as e:
+                log.warning("learned edits unavailable: %s", e)
+        seen = {}
+        recorder = self.recorder
+
+        def polish(raw, before, after, span=None):
+            if not seen:
+                screen, draft = grab.get(1.0) if grab else ("", "")
+                seen.update(screen=screen, draft=draft)
+            if rehear and span:
+                raw = self._rehear(span, recorder, polish.pcm, seen["screen"]) or raw
+            c = dict(ctx, screen=seen["screen"], draft=(seen["draft"] + before)[-1500:], piece=True, next=after)
+            return self._format(raw, c, toast=False)
+        polish.pcm = None   # the finished recording, once you let go (the recorder's buffer is gone by then)
+        return polish
+
+    def _rehear(self, span, recorder, pcm, screen):
+        """One sentence's audio through the main speech engine. Returns its text, or None (then the live words
+        are used: a failed or rate-limited request never holds anything up)."""
+        cfg = self.cfg
+        start, end = span
+        try:
+            if pcm is not None:
+                clip = pcm[int(start * audio.RATE):(int(end * audio.RATE) if end is not None else len(pcm))]
+            else:
+                clip = recorder.audio_from(start)
+                if end is not None:
+                    clip = clip[:int((end - start) * audio.RATE)]
+            if len(clip) < audio.RATE * 0.4:
+                return None
+            if cfg.get("whisper_boost", True):
+                clip = audio.boost(clip)
+            text, engine = stt.transcribe(clip, cfg, context.hint_names(screen))
+            if not text.strip() or stt.is_hallucination(text, len(clip) / audio.RATE):
+                return None
+            return text.strip()
+        except Exception as e:
+            log.info("instant text: couldn't hear a sentence again: %s", e)
+            return None
 
     def _take_instant(self):
         """Stop live typing now (main thread, doesn't wait). Returns what the worker needs to finish up."""
@@ -636,6 +691,11 @@ class App:
                 self._swap_live(live_info, "")
             self.post("toast", "Didn't catch that - no speech heard", "warn")
             return
+        if (live_info and mode == "dictation" and IS_WIN and live_info[0].polisher is not None
+                and live_info[0].fixing and not cfg.get("instant_text_recheck", False)):
+            if self._quick_finish(pcm, speech_secs, seconds, t0, live_info):
+                return
+            log.info("instant text: quick finish not possible, formatting the whole recording")
         if cfg.get("whisper_boost", True):
             pcm = audio.boost(pcm)
         screen, draft = self.grab.get(0.6) if self.grab else ("", "")
@@ -702,6 +762,45 @@ class App:
         elif final.strip() and IS_WIN:
             result = winapi.paste(final, cfg, target=target, saved=saved)
             status = result["status"]
+        self._after_insert(final, result, status, enter, target, ctx, mode, raw, seconds, engine, latency, screen)
+
+    def _quick_finish(self, pcm, speech_secs, seconds, t0, live_info):
+        """Instant text with sentence tidying: when you let go, most of the text is already tidied in the box.
+        Hear the last bit, tidy the last sentence, change only what differs. Returns False (having typed nothing
+        new) when that isn't possible, so the caller formats the whole recording the normal way."""
+        cfg = self.cfg
+        st, (hwnd, proc, title, pid), _user_typed = live_info
+        if isinstance(st, instant.DeepgramStreamer):
+            raw, engine = st.final_transcript(), "deepgram (live)"
+        else:
+            raw, engine = st.final_text(pcm), f"instant ({getattr(st.model, 'name', 'local')})"
+        if not raw.strip() or stt.is_hallucination(raw, speech_secs):
+            return False
+        enter = False
+        if cfg.get("voice_enter", True):
+            raw, enter = textproc.split_enter_command(raw)
+            if enter and not raw.strip():
+                return False
+        st.polisher.polish.pcm = pcm
+        final = st.polisher.finish(raw, spans=st.word_spans() if hasattr(st, "word_spans") else None)
+        if not final or not final.strip():
+            return False
+        if cfg.get("add_trailing_space", True) and not final[-1].isspace() and not enter:
+            final += " "
+        target = (proc, title, pid)
+        ctx = {"app": proc, "title": title, "category": textproc.app_category(proc, title)}
+        winapi.wait_modifiers_released()
+        if winapi.user32.GetForegroundWindow() == hwnd and st.settle(final):
+            result = {"proc": proc, "keys": "typed", "status": "ok", "live": True}
+        else:   # couldn't just finish it in place: select what was typed live and paste (or copy, if unsafe)
+            result = self._swap_live(live_info, final, target) or winapi.paste(final, cfg, target=target)
+        latency = time.perf_counter() - t0
+        self._after_insert(final, result, result["status"], enter, target, ctx, "dictation", raw, seconds,
+                           engine, latency, "")
+        return True
+
+    def _after_insert(self, final, result, status, enter, target, ctx, mode, raw, seconds, engine, latency, screen):
+        cfg = self.cfg
         if final.strip() and IS_WIN:
             if status == "ok":
                 if enter:
@@ -824,7 +923,7 @@ class App:
         log.info("learned from a correction | text=%s", added)
         self.bar.toast(f'Learned "{", ".join(added)[:34]}" - added to your dictionary', "ok", 4)
 
-    def _format(self, raw, ctx):
+    def _format(self, raw, ctx, toast=True):
         cfg = self.cfg
         whole = textproc.whole_snippet(raw, cfg.get("snippets", []))
         if whole is not None:
@@ -840,7 +939,8 @@ class App:
                     log.warning("formatter output rejected | text=%r", out)
             except Exception as e:
                 log.warning("AI formatting failed, using offline cleanup: %s", e)
-                self.post("toast", "AI formatting unavailable - used offline cleanup", "warn")
+                if toast:
+                    self.post("toast", "AI formatting unavailable - used offline cleanup", "warn")
         if text is None:
             text = textproc.local_cleanup(protected)
         text = textproc.expand_snippets(text, mapping)

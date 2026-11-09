@@ -2,8 +2,15 @@
 
 A small offline model (the same one behind live words) re-reads the recent audio about twice a second. A word is
 typed only once two passes in a row hear it the same way (the "local agreement" policy from whisper_streaming), so
-guesses rarely reach your text box. When you let go, the full recording goes through your normal engine and AI
-formatting as always, and the polished text replaces what was typed live.
+guesses rarely reach your text box.
+
+Each sentence is tidied by the AI as soon as you've finished it (and started the next, which it gets as context
+for corrections like "actually, make that Thursday"); the tidied sentence replaces the raw one in place. With the
+quick processor model, each sentence's audio is first heard again by your main speech engine, so the final words
+are as accurate as a normal dictation. When you
+let go, only the end is left: one last pass over the audio, the last sentence tidied, done. With "double-check the
+whole recording" on, the full recording goes through your normal engine and AI formatting instead, and the
+polished text replaces everything typed live.
 
 Before replacing anything, Aqua Lite checks that the text it typed is still right before the cursor (through
 Windows UI Automation). If you clicked somewhere else or edited it in the meantime, nothing is deleted: the
@@ -44,8 +51,7 @@ class Agreement:
     def last_end(self):
         return self.committed[-1][2] if self.committed else 0.0
 
-    def insert(self, words):
-        """Feed one pass; returns the words that just became final."""
+    def _fresh(self, words):
         new = [w for w in words if w[1] > self.last_end - 0.1]
         if new and self.committed and abs(new[0][1] - self.last_end) < 1.0:
             # the model often hears the last typed word(s) again at the start of the window: drop the repeat
@@ -53,6 +59,18 @@ class Agreement:
                 if [norm(w[0]) for w in self.committed[-n:]] == [norm(w[0]) for w in new[:n]]:
                     new = new[n:]
                     break
+        return new
+
+    def insert_final(self, words):
+        """The last pass after you let go: every word it hears is final (there's no next pass to agree with)."""
+        new = self._fresh(words)
+        self.committed += new
+        self.pending = []
+        return new
+
+    def insert(self, words):
+        """Feed one pass; returns the words that just became final."""
+        new = self._fresh(words)
         agreed = []
         for a, b in zip(new, self.pending):
             if not norm(a[0]) or norm(a[0]) != norm(b[0]):
@@ -92,6 +110,185 @@ def common_prefix(a, b):
     return n
 
 
+ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "st", "vs", "etc", "eg", "ie", "jr", "sr", "fig", "approx", "no"}
+CORRECTION_CUES = ("no wait", "actually", "scratch that", "sorry", "i mean", "make that", "change that",
+                   "never mind", "nevermind", "forget that", "delete that", "take that back", "not ")
+
+
+def sentence_ends(text):
+    """Positions just past each sentence end in `text` that's followed by more words (so the sentence is over).
+    Skips abbreviations and initials like 'Dr.' and 'J.'"""
+    out = []
+    for m in re.finditer(r"[.?!؟。][\"')\]”]*(?=\s+\S)", text):
+        if m.group(0)[0] == ".":
+            word = re.search(r"(\S+)$", text[:m.start()])
+            w = (word.group(1) if word else "").lower().strip("(\"'")
+            if w.replace(".", "") in ABBREVIATIONS or (len(w) == 1 and w.isalpha()):
+                continue
+        out.append(m.end())
+    return out
+
+
+def is_correction(text):
+    t = " " + re.sub(r"[^\w\s]", " ", (text or "").lower()) + " "
+    t = re.sub(r"\s+", " ", t)
+    return any(" " + c in t for c in CORRECTION_CUES)
+
+
+class Polisher:
+    """Tidies each sentence with the AI while you're still talking, so letting go only finishes the last one.
+
+    The engine feeds it the confirmed raw words (feed). Once a sentence is over and the next one is too, the first
+    is sent to the AI with the next as context (so "...Friday. Actually, make that Thursday." still corrects it).
+    compose(raw) gives what the box should show: tidied sentences, then the raw rest. finish() tidies whatever is
+    left after you let go. Sentences are tidied one at a time, in order, on one background thread.
+
+    polish(raw, before, after, span) -> text: `before` is the tidied text so far, `after` the next sentence (""
+    at the end), `span` (start, end) seconds of the sentence's audio when the engine knows its word timings (end
+    None = to the end of the recording), so the caller can hear it again with a better engine. It may raise; that
+    sentence then stays as it was heard."""
+
+    MIN_WORDS = 4     # shorter sentences ride along with the next one
+    LOOKAHEAD = 1
+
+    def __init__(self, polish):
+        self.polish = polish
+        self.segs = []        # [raw, tidied or None, next sentence, span]: the tidied part of the text, in order
+        self.found = []       # finished raw sentences not handed out yet
+        self.scanned = 0      # chars of the raw text split into segs + found
+        self.cond = threading.Condition()
+        self.changed = False
+        self.closed = False
+        self.gen = 0
+        self.busy = False
+        self.thread = threading.Thread(target=self._work, daemon=True, name="instant-polish")
+        self.thread.start()
+
+    @staticmethod
+    def _raw_of(segs):
+        return "".join(seg[0] for seg in segs)
+
+    @staticmethod
+    def _shown(segs):
+        return "".join(seg[1] if seg[1] is not None else seg[0] for seg in segs)
+
+    @staticmethod
+    def span_of(spans, a, b):
+        """Seconds of audio for characters a..b of the raw text, from the engine's word spans
+        [(first char, end char, start s, end s), ...]: cut halfway into the pauses on each side, so neither
+        neighbour's words leak in. b=None: to the end of the recording."""
+        inside = [i for i, w in enumerate(spans) if w[0] >= a and (b is None or w[1] <= b)]
+        if not spans or not inside:
+            return None
+        i, j = inside[0], inside[-1]
+        start = (spans[i - 1][3] + spans[i][2]) / 2 if i > 0 else max(0.0, spans[i][2] - 0.25)
+        if b is None:
+            return start, None
+        end = (spans[j][3] + spans[j + 1][2]) / 2 if j + 1 < len(spans) else spans[j][3] + 0.25
+        return start, end
+
+    def feed(self, stable, spans=None):
+        """Confirmed raw text so far (it only ever grows), and its word spans if the engine has them."""
+        with self.cond:
+            if self.closed:
+                return
+            done = self._raw_of(self.segs) + "".join(self.found)
+            if not stable.startswith(done):
+                return   # shouldn't happen (confirmed words don't change); never guess
+            for end in (e for e in sentence_ends(stable) if e > self.scanned):
+                self.found.append(stable[self.scanned:end])
+                self.scanned = end
+            while len(self.found) > self.LOOKAHEAD:
+                if len(self.found[0].split()) < self.MIN_WORDS:
+                    self.found[0:2] = [self.found[0] + self.found[1]]
+                    continue
+                a = len(self._raw_of(self.segs))
+                raw = self.found.pop(0)
+                span = self.span_of(spans, a, a + len(raw)) if spans else None
+                self.segs.append([raw, None, self.found[0].strip(), span])
+                self.cond.notify_all()
+
+    def _work(self):
+        while True:
+            with self.cond:
+                while not self.closed and all(seg[1] is not None for seg in self.segs):
+                    self.cond.wait()
+                if self.closed:
+                    return
+                i = next(i for i, seg in enumerate(self.segs) if seg[1] is None)
+                raw, after, span = self.segs[i][0], self.segs[i][2], self.segs[i][3]
+                before = self._shown(self.segs[:i])
+                gen = self.gen
+                self.busy = True
+            out = self._polish_one(raw, before, after, span)
+            with self.cond:
+                self.busy = False
+                if gen == self.gen and i < len(self.segs) and self.segs[i][0] == raw:
+                    self.segs[i][1] = out
+                    self.changed = True
+                self.cond.notify_all()
+
+    def _polish_one(self, raw, before, after, span=None):
+        lead = raw[:len(raw) - len(raw.lstrip())]
+        try:
+            out = (self.polish(raw.strip(), before, after, span) or "").strip()
+        except Exception as e:
+            log.info("instant text: couldn't tidy a sentence: %s", e)
+            return raw
+        if not out and not (is_correction(raw) or is_correction(after)):
+            return raw   # an empty answer only makes sense for a sentence that was taken back
+        # line breaks can't be typed safely (Enter sends the message in chat apps): spaces while you talk
+        out = re.sub(r"\s*\n\s*", " ", out)
+        return lead + out if out else ""
+
+    def take_changed(self):
+        with self.cond:
+            ch, self.changed = self.changed, False
+            return ch
+
+    def compose(self, raw):
+        """What the box should show for the raw text `raw`: the tidied sentences, then the rest as heard."""
+        with self.cond:
+            head = self._raw_of(self.segs)
+            if not raw.startswith(head):
+                return raw
+            return (self._shown(self.segs) + raw[len(head):]).lstrip()
+
+    def finish(self, raw, wait=2.5, spans=None):
+        """After you let go: the whole tidied text for the final raw text, or None if it doesn't line up (then
+        the caller formats everything the normal way). Waits a little for a sentence still being tidied; any
+        that aren't back by then are tidied together with the end."""
+        with self.cond:
+            self.closed = True   # no new sentences; the worker stops after the one it's on
+            self.cond.notify_all()
+            end = time.monotonic() + wait
+            while self.busy and time.monotonic() < end:
+                self.cond.wait(end - time.monotonic())
+            self.gen += 1        # a late answer is ignored
+            done = []
+            for seg in self.segs:
+                if seg[1] is None:
+                    break
+                done.append(seg)
+            head = self._raw_of(done)
+            if not raw.startswith(head):
+                return None
+            prefix = self._shown(done)
+        tail = raw[len(head):]
+        if not tail.strip():
+            return prefix.strip()
+        lead = " " if prefix.strip() else ""
+        span = self.span_of(spans, len(head), None) if spans else None
+        try:
+            out = (self.polish(tail.strip(), prefix, "", span) or "").strip()
+        except Exception as e:
+            log.info("instant text: couldn't tidy the end: %s", e)
+            out = tail.strip()
+        if not out and not is_correction(tail):
+            out = tail.strip()
+        return (prefix + (lead + out if out else "")).strip()
+
+
 class LiveTyper:
     """Keeps the text box in step with what's being heard, word by word. Shared by every instant-text engine.
 
@@ -116,6 +313,43 @@ class LiveTyper:
         self.failed = None
         self.thread = None
         self.finished = False
+        self.polisher = None        # Polisher: tidies finished sentences in place while you talk
+
+    def view(self, raw):
+        """What the box should show for the raw words: with tidied sentences swapped in, when that's possible."""
+        if self.polisher is None or not self.fixing:
+            return raw
+        return self.polisher.compose(raw)
+
+    def feed_polisher(self, stable, spans=None):
+        if self.polisher is not None and self.fixing:
+            self.polisher.feed(stable, spans)
+
+    def settle(self, want):
+        """After you let go: make the box show exactly `want` (the finished, tidied text), changing only what
+        differs. Same safety as while talking: the box must still end with what was typed. Returns True when the
+        box shows `want`; False means nothing more was done (the caller falls back to select + paste)."""
+        with self.lock:
+            have = self.typed
+            if want == have:
+                return True
+            if not (self.fixing and self.begun) or "\n" in want or "\r" in want:
+                return False   # line breaks go in by pasting (typing Enter would send a chat message)
+            keep = common_prefix(have, want)
+            if keep < len(have):
+                if keep < len(want):
+                    keep = have.rfind(" ", 0, keep) + 1
+                if not self.check(have):
+                    return False
+                if not self.delete_fn(presses(have[keep:])):
+                    return False
+                self.typed = have = have[:keep]
+            add = want[len(have):]
+            if add:
+                if not self.type_fn(add):
+                    return False
+                self.typed = want
+            return True
 
     def start(self):
         self.thread = threading.Thread(target=self._run, daemon=True, name="instant-text")
@@ -227,6 +461,8 @@ class Streamer(LiveTyper):
                 self.failed = str(e)
                 log.warning("instant text stopped: %s", e)
                 return
+            if self.polisher is not None and self.polisher.take_changed():
+                self.show(self.view(self.target()))
             self.stop_event.wait(max(0.05, self.every - (time.perf_counter() - t0)))
 
     def prompt(self):
@@ -246,12 +482,43 @@ class Streamer(LiveTyper):
         if heard and stt.is_hallucination(heard, 1.0):
             words = []
         self.agree.insert(words)
-        self.show(self.target())
+        self.feed_polisher(self.agree.text(), self.word_spans())
+        self.show(self.view(self.target()))
         if self.on_caption:
             shown = self.agree.committed[-8:] + self.agree.pending
             self.on_caption(join_words(shown))
         self._trim()
         return True
+
+    def word_spans(self):
+        """(first char, end char, start s, end s) for each confirmed word, matching agree.text() exactly."""
+        out, pos = [], 0
+        for w in self.agree.committed:
+            t = w[0].strip()
+            if not t:
+                continue
+            if out:
+                pos += 1
+            out.append((pos, pos + len(t), w[1], w[2]))
+            pos += len(t)
+        return out
+
+    def final_text(self, pcm):
+        """After you let go: stop, then one last pass over the end of the recording (`pcm`, 16 kHz), keeping every
+        word it hears. Returns the whole raw text: the confirmed words plus that end."""
+        self.finish()
+        try:
+            audio = pcm[int(self.offset * RATE):]
+            words = []
+            if len(audio) >= RATE * 0.3:
+                words = [(w, s + self.offset, e + self.offset)
+                         for w, s, e in self.model.words(audio, self.cfg, self.prompt())]
+                if words and stt.is_hallucination(join_words(words), 1.0):
+                    words = []
+            self.agree.insert_final(words)
+        except Exception as e:
+            log.info("instant text: last pass failed: %s", e)
+        return self.agree.text()
 
     def target(self):
         """What the box should show now: confirmed words, plus the newest guesses when they can be corrected."""
@@ -339,6 +606,8 @@ class DeepgramStreamer(LiveTyper):
         self.receiver.start()
         while not self.stop_event.is_set():
             self._send_new_audio()
+            if self.polisher is not None and self.polisher.take_changed():
+                self.show(self.view(self.target()))
             self.stop_event.wait(self.SEND_SECS)
 
     def _send_new_audio(self):
@@ -370,7 +639,8 @@ class DeepgramStreamer(LiveTyper):
                     self.interim = text
                 if data.get("from_finalize"):
                     self.flushed.set()
-                self.show(self.target())
+                self.feed_polisher(" ".join(f.strip() for f in self.finals if f.strip()))
+                self.show(self.view(self.target()))
         except Exception as e:
             if not self.closed:
                 log.info("instant text: Deepgram stream ended: %s", e)
