@@ -358,6 +358,20 @@ def check_sentence_tidy():
     assert final == "See you on Thursday at noon. Bring the deck please. Thanks a lot", final
     assert lt.settle(final) and box["text"] == final, box["text"]
     assert not lt.settle("two\nlines")   # line breaks are pasted, never typed (Enter would send a chat message)
+    # a busy app shows the old text for a moment after a burst of keys: wait for it, don't give up on the box
+    slow = {"text": "", "behind": 3}
+
+    def slow_check(t):
+        if slow["behind"]:
+            slow["behind"] -= 1
+            return False
+        return slow["text"].endswith(t)
+    lag = instant.LiveTyper(lambda t: slow.update(text=slow["text"] + t) or True,
+                            delete_fn=lambda n: slow.update(text=slow["text"][:-n]) or True, check=slow_check)
+    lag.show("hello wrold")
+    slow["behind"] = 3
+    lag.show("hello world")
+    assert slow["text"] == "hello world" and not lag.stop_event.is_set(), slow
     spans = [(0, 2, 0.0, 0.3), (3, 6, 0.5, 0.9), (7, 9, 1.5, 1.8), (10, 14, 2.0, 2.4)]   # "hi you. ok then"
     assert instant.Polisher.span_of(spans, 0, 7) == (0.0, 1.2)       # cut halfway into the pause after "you."
     assert instant.Polisher.span_of(spans, 7, None) == (1.2, None)

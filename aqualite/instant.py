@@ -314,6 +314,7 @@ class LiveTyper:
         self.thread = None
         self.finished = False
         self.polisher = None        # Polisher: tidies finished sentences in place while you talk
+        self.unconfirmed = 0        # keys sent since the box last matched: the app may still be working through them
 
     def view(self, raw):
         """What the box should show for the raw words: with tidied sentences swapped in, when that's possible."""
@@ -339,15 +340,18 @@ class LiveTyper:
             if keep < len(have):
                 if keep < len(want):
                     keep = have.rfind(" ", 0, keep) + 1
-                if not self.check(have):
+                if not self._box_matches(have):
                     return False
-                if not self.delete_fn(presses(have[keep:])):
+                n = presses(have[keep:])
+                if not self.delete_fn(n):
                     return False
+                self.unconfirmed += n
                 self.typed = have = have[:keep]
             add = want[len(have):]
             if add:
                 if not self.type_fn(add):
                     return False
+                self.unconfirmed += len(add)
                 self.typed = want
             return True
 
@@ -389,8 +393,10 @@ class LiveTyper:
                     keep = have.rfind(" ", 0, keep) + 1
                 if not self._safe_to_fix(have):
                     return
-                if not self.delete_fn(presses(have[keep:])):
+                n = presses(have[keep:])
+                if not self.delete_fn(n):
                     return self._halt("backspace was blocked")
+                self.unconfirmed += n
                 self.typed = have = have[:keep]
             add = want[len(have):]
             if not add:
@@ -414,12 +420,31 @@ class LiveTyper:
                     return
                 if not self.type_fn(piece):
                     return self._halt("typing was blocked")
+                self.unconfirmed += len(piece)
                 self.typed += piece
                 if i < len(pieces) - 1:
                     time.sleep(gap)
 
+    def _box_matches(self, have):
+        """check(have), allowing for lag: after a burst of keys (a tidied sentence is a lot of Backspace and retyping)
+        a busy app - web editors especially - shows the old text for a moment. Keep looking for a short while,
+        longer the more keys are still on their way; only a box that never catches up has really been changed."""
+        end = time.monotonic() + min(2.5, 0.3 + 0.004 * self.unconfirmed)
+        tries = 0
+        while True:
+            got = self.check(have)
+            tries += 1
+            if got:
+                if tries > 1:
+                    log.info("instant text: the box caught up after %d checks (%d keys)", tries, self.unconfirmed)
+                self.unconfirmed = 0
+                return True
+            if got is None or self.stop_event.is_set() or time.monotonic() >= end:
+                return False
+            time.sleep(0.05)
+
     def _safe_to_fix(self, have):
-        if self.check(have):
+        if self._box_matches(have):
             return True
         self._halt("the text box changed")   # a click, an edit, or it can't be read any more: hands off
         return False
