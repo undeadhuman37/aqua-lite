@@ -88,9 +88,49 @@ def _scale(win):
         return 1.0
 
 
+def _grow(im, border, w=None, h=None):
+    """Widen/heighten a 9-slice drawing by stretching its plain middle, so it looks the same but has a big middle.
+
+    ttk stretches an image element by *tiling* the middle. A tiny middle means hundreds of draws per widget,
+    and Tk on Windows is slow at each one, so the window lagged. With a big middle it's one draw per piece."""
+    from PIL import Image
+    bl, bt, br, bb = border
+    W, H = im.size
+    if w and w > W:
+        mid = im.crop((bl, 0, W - br, H)).resize((w - bl - br, H), Image.NEAREST)
+        out = Image.new(im.mode, (w, H))
+        out.paste(im.crop((0, 0, bl, H)), (0, 0))
+        out.paste(mid, (bl, 0))
+        out.paste(im.crop((W - br, 0, W, H)), (w - br, 0))
+        im, W = out, w
+    if h and h > H:
+        mid = im.crop((0, bt, W, H - bb)).resize((W, h - bt - bb), Image.NEAREST)
+        out = Image.new(im.mode, (W, h))
+        out.paste(im.crop((0, 0, W, bt)), (0, 0))
+        out.paste(mid, (0, bt))
+        out.paste(im.crop((0, H - bb, W, H)), (0, h - bb))
+        im = out
+    return im
+
+
+def _flat(im, bg):
+    """Lay a drawing on a solid colour (or image). Tk on Windows draws see-through images with a slow software
+    blend every time; a solid image is a plain copy."""
+    from PIL import Image
+    under = bg.convert("RGBA") if isinstance(bg, Image.Image) else Image.new("RGBA", im.size, tuple(bg) + (255,))
+    return Image.alpha_composite(under, im.convert("RGBA")).convert("RGB")
+
+
+SURFACES = (("Aero", skin.PAGE), ("AeroCard", skin.CARD))   # element set -> the colour it sits on
+
+
 def _make_elements(st, root, sc):
-    """Draw every themed piece once (at the screen's scale) and register it as a ttk image element."""
-    from PIL import ImageTk
+    """Draw every themed piece once (at the screen's scale) and register it as a ttk image element.
+
+    Each control gets two solid versions, one for the page and one for a white card, and every stretchable
+    piece gets a wide middle. -width/-height keep the natural sizes small so short labels still get snug
+    buttons."""
+    from PIL import Image, ImageTk
 
     def s(v):
         return max(1, int(round(v * sc)))
@@ -102,51 +142,104 @@ def _make_elements(st, root, sc):
     def el(name, base, *states, **kw):
         st.element_create(name, "image", base, *states, **kw)
 
-    bw, bh = s(44), s(30)   # small, so short labels get snug buttons (ttk stretches the middle)
-    for kind, primary in (("btn", False), ("pri", True)):
-        im = {k: P(f"{kind}_{k}", skin.button(bw, bh, k, primary)) for k in ("normal", "active", "pressed", "disabled")}
-        el("Aero.primary" if primary else "Aero.button", im["normal"], ("disabled", im["disabled"]),
-           ("pressed", im["pressed"]), ("active", im["active"]), border=(s(15), s(12), s(15), s(15)),
-           padding=(s(2), s(1), s(2), s(3)), sticky="nsew")
-    th, rh = s(20), s(18)
-    t = {(on, k): P(f"tg_{on}_{k}", skin.toggle(th, on, k, gap=s(8))) for on in (0, 1)
-         for k in ("normal", "active", "disabled")}
-    el("Aero.toggle", t[0, "normal"], ("disabled selected", t[1, "disabled"]), ("disabled", t[0, "disabled"]),
-       ("selected", t[1, "normal"]), ("active", t[0, "active"]), sticky="")
-    r = {(on, k): P(f"rd_{on}_{k}", skin.radio(rh, on, k, gap=s(8))) for on in (0, 1)
-         for k in ("normal", "active", "disabled")}
-    el("Aero.radio", r[0, "normal"], ("disabled selected", r[1, "disabled"]), ("disabled", r[0, "disabled"]),
-       ("selected", r[1, "normal"]), ("active", r[0, "active"]), sticky="")
+    bw, bh = s(44), s(30)
+    bb = (s(15), s(12), s(15), s(15))
+    ph, sh = s(16), s(22)
+    pb = (s(8), s(7), s(8), s(7))
     fw, fh = s(40), s(28)
-    f = {k: P(f"fld_{k}", skin.field(fw, fh, k)) for k in ("normal", "active", "focus", "disabled")}
-    el("Aero.field", f["normal"], ("disabled", f["disabled"]), ("focus", f["focus"]), ("active", f["active"]),
-       border=s(8), padding=s(3), sticky="nsew")
-    a = {k: P(f"arr_{k}", skin.arrow(s(24), s(22), k)) for k in ("normal", "active", "disabled")}
+    disabled_field = (240, 245, 249)
+    for E, bg in SURFACES:
+        for kind, primary in (("button", False), ("primary", True)):
+            im = {k: P(f"{E}_{kind}_{k}", _flat(_grow(skin.button(bw, bh, k, primary), bb, w=s(420)), bg))
+                  for k in ("normal", "active", "pressed", "disabled")}
+            el(f"{E}.{kind}", im["normal"], ("disabled", im["disabled"]), ("pressed", im["pressed"]),
+               ("active", im["active"]), border=bb, padding=(s(2), s(1), s(2), s(3)), sticky="nsew",
+               width=bw, height=bh)
+        t = {(on, k): P(f"{E}_tg_{on}_{k}", _flat(skin.toggle(s(20), on, k, gap=s(8)), bg)) for on in (0, 1)
+             for k in ("normal", "active", "disabled")}
+        el(f"{E}.toggle", t[0, "normal"], ("disabled selected", t[1, "disabled"]), ("disabled", t[0, "disabled"]),
+           ("selected", t[1, "normal"]), ("active", t[0, "active"]), sticky="")
+        r = {(on, k): P(f"{E}_rd_{on}_{k}", _flat(skin.radio(s(18), on, k, gap=s(8)), bg)) for on in (0, 1)
+             for k in ("normal", "active", "disabled")}
+        el(f"{E}.radio", r[0, "normal"], ("disabled selected", r[1, "disabled"]), ("disabled", r[0, "disabled"]),
+           ("selected", r[1, "normal"]), ("active", r[0, "active"]), sticky="")
+        b8 = (s(8),) * 4
+        f = {k: P(f"{E}_fld_{k}", _flat(_grow(skin.field(fw, fh, k), b8, w=s(600)), bg))
+             for k in ("normal", "active", "focus", "disabled")}
+        el(f"{E}.field", f["normal"], ("disabled", f["disabled"]), ("focus", f["focus"]), ("active", f["active"]),
+           border=b8, padding=s(3), sticky="nsew", width=fw, height=fh)
+        trough = _flat(_grow(skin.progress_trough(s(120), ph), pb, w=s(1000)), bg)
+        el(f"{E}.ptrough", P(f"{E}_ptrough", trough), border=pb, padding=s(2), sticky="nsew", width=s(120),
+           height=ph)
+        st_b = (s(10), 0, s(10), 0)
+        strough = _flat(_grow(skin.scale_trough(s(120), sh), st_b, w=s(1000)), bg)
+        el(f"{E}.strough", P(f"{E}_strough", strough), border=st_b, sticky="nsew", width=s(120), height=sh)
+        under = strough.crop((s(40), 0, s(40) + sh, sh))   # the plain groove the ball sits on
+        sl = {k: P(f"{E}_sl_{k}", _flat(skin.slider(sh, k), under)) for k in ("normal", "active", "pressed")}
+        el(f"{E}.slider", sl["normal"], ("pressed", sl["pressed"]), ("active", sl["active"]), sticky="")
+    # the combobox arrow sits on the white field, whichever surface the field is on
+    a = {k: P(f"arr_{k}", _flat(skin.arrow(s(24), s(22), k), disabled_field if k == "disabled" else skin.CARD))
+         for k in ("normal", "active", "disabled")}
     el("Aero.arrow", a["normal"], ("disabled", a["disabled"]), ("active", a["active"]), sticky="")
-    ph = s(16)
-    el("AeroBar.trough", P("ptrough", skin.progress_trough(s(120), ph)), border=(s(8), s(7), s(8), s(7)),
-       padding=s(2), sticky="nsew")
-    el("AeroBar.pbar", P("pbar", skin.progress_bar(s(40), ph - 2 * s(2))), border=(s(6), s(5), s(6), s(5)),
-       sticky="nsew")
-    sh = s(22)
-    el("AeroScale.trough", P("strough", skin.scale_trough(s(120), sh)), border=(s(10), 0, s(10), 0), sticky="nsew")
-    sl = {k: P(f"sl_{k}", skin.slider(sh, k)) for k in ("normal", "active", "pressed")}
-    el("Aero.slider", sl["normal"], ("pressed", sl["pressed"]), ("active", sl["active"]), sticky="")
-    tb = {k: P(f"th_{k}", skin.thumb(s(12), s(48), k)) for k in ("normal", "active", "pressed")}
-    el("AeroV.thumb", tb["normal"], ("pressed", tb["pressed"]), ("active", tb["active"]),
-       border=(0, s(7), 0, s(7)), sticky="nsew")
-    from PIL import Image
-    el("AeroV.trough", P("vtrough", Image.new("RGBA", (s(12), s(12)), (0, 0, 0, 0))), sticky="nsew")
-    cs = s(48)
+    # the progress fill sits on the trough; it's a single short run of pieces, so it keeps its soft edges
+    pfill = (s(6), s(5), s(6), s(5))
+    el("Aero.pbar", P("pbar", _grow(skin.progress_bar(s(40), ph - 2 * s(2)), pfill, w=s(1000))), border=pfill,
+       sticky="nsew", width=s(40), height=ph - 2 * s(2))
+    # the page scrollbar floats over the page
+    tbb = (0, s(7), 0, s(7))
+    tb = {k: P(f"th_{k}", _flat(_grow(skin.thumb(s(12), s(48), k), tbb, h=s(900)), skin.PAGE))
+          for k in ("normal", "active", "pressed")}
+    el("AeroV.thumb", tb["normal"], ("pressed", tb["pressed"]), ("active", tb["active"]), border=tbb,
+       sticky="nsew", width=s(12), height=s(48))
+    el("AeroV.trough", P("vtrough", Image.new("RGB", (s(12), s(900)), skin.PAGE)), sticky="nsew", width=s(12),
+       height=s(12))
+    # cards (already solid: drawn on the page colour)
+    cs, cb = s(48), (s(18),) * 4
     pad = (s(4), s(3), s(4), s(5))   # keeps children off the rounded edge and the shadow
-    el("Aero.card", P("card", skin.card(cs, radius=12)), border=s(18), padding=pad, sticky="nsew")
-    el("Aero.cardsel", P("cardsel", skin.card(cs, radius=12, selected=True)), border=s(18), padding=pad,
-       sticky="nsew")
+    for key, sel in (("card", False), ("cardsel", True)):
+        im = _flat(_grow(skin.card(cs, radius=12, selected=sel), cb, w=s(900), h=s(500)), skin.PAGE)
+        el(f"Aero.{key}", P(key, im), border=cb, padding=pad, sticky="nsew", width=cs, height=cs)
+    pill_b = (s(11), s(5), s(11), s(5))
     for name, (fill, _ink) in skin.PILLS.items():
-        el(f"Aero.pill.{name}", P(f"pill_{name}", skin.pill(s(40), s(22), fill)), border=(s(11), s(5), s(11), s(5)),
-           padding=(s(10), s(2), s(10), s(3)), sticky="nsew")
-    el("Aero.key", P("key", skin.keycap(s(28), s(24))), border=(s(7), s(5), s(7), s(8)),
-       padding=(s(7), s(2), s(7), s(4)), sticky="nsew")
+        im = _flat(_grow(skin.pill(s(40), s(22), fill), pill_b, w=s(300)), skin.CARD)
+        el(f"Aero.pill.{name}", P(f"pill_{name}", im), border=pill_b, padding=(s(10), s(2), s(10), s(3)),
+           sticky="nsew", width=s(40), height=s(22))
+    key_b = (s(7), s(5), s(7), s(8))
+    el("Aero.key", P("key", _flat(_grow(skin.keycap(s(28), s(24)), key_b, w=s(240)), skin.CARD)), border=key_b,
+       padding=(s(7), s(2), s(7), s(4)), sticky="nsew", width=s(28), height=s(24))
+
+
+def _layouts(E):
+    """The ttk layouts for the controls, built from element set E ("Aero" on the page, "AeroCard" on a card)."""
+    inner = [("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]
+
+    def check(base, ind):
+        return [(f"{base}.padding", {"sticky": "nsew", "children": [
+            (f"{E}.{ind}", {"side": "left", "sticky": ""}), (f"{base}.label", {"side": "left", "sticky": "nsew"})]})]
+    return {
+        "TButton": [(f"{E}.button", {"sticky": "nsew", "children": inner})],
+        "Primary.TButton": [(f"{E}.primary", {"sticky": "nsew", "children": inner})],
+        "TCheckbutton": check("Checkbutton", "toggle"),
+        "TRadiobutton": check("Radiobutton", "radio"),
+        "TEntry": [(f"{E}.field", {"sticky": "nsew", "children": [
+            ("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})]})],
+        "TCombobox": [(f"{E}.field", {"sticky": "nsew", "children": [
+            ("Aero.arrow", {"side": "right", "sticky": ""}),
+            ("Combobox.padding", {"expand": "1", "sticky": "nsew", "children": [
+                ("Combobox.textarea", {"sticky": "nsew"})]})]})],
+        "TSpinbox": [(f"{E}.field", {"sticky": "nsew", "children": [
+            ("null", {"side": "right", "sticky": "ns", "children": [
+                ("Spinbox.uparrow", {"side": "top", "sticky": "e"}),
+                ("Spinbox.downarrow", {"side": "bottom", "sticky": "e"})]}),
+            ("Spinbox.padding", {"sticky": "nsew", "children": [("Spinbox.textarea", {"sticky": "nsew"})]})]})],
+        "Horizontal.TProgressbar": [(f"{E}.ptrough", {"sticky": "nsew", "children": [
+            ("Aero.pbar", {"side": "left", "sticky": "ns"})]})],
+        "Horizontal.TScale": [(f"{E}.strough", {"sticky": "nsew", "children": [
+            (f"{E}.slider", {"side": "left", "sticky": ""})]})],
+    }
+
+
+_CARD_LAYOUTS = _layouts("AeroCard")
 
 
 def apply_aero_style(win, keep=None):
@@ -182,37 +275,22 @@ def apply_aero_style(win, keep=None):
         st.layout(name, [("Aero.cardsel" if name == "PickOn.TFrame" else "Aero.card", {"sticky": "nsew"})])
     st.layout("Tile.TFrame", [("Aero.card", {"sticky": "nsew"})])
     st.configure("Line.TFrame", background="#cfe6f6")
+    for name, lay in _layouts("Aero").items():
+        st.layout(name, lay)
     # buttons
-    inner = [("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]
-    st.layout("TButton", [("Aero.button", {"sticky": "nsew", "children": inner})])
-    st.layout("Primary.TButton", [("Aero.primary", {"sticky": "nsew", "children": inner})])
     st.configure("TButton", padding=(s(16), s(4), s(16), s(6)), foreground="#063a5e", font=(semi, 10),
                  anchor="center", width=-6)   # clam forces 11-character buttons; let them fit their words
     st.configure("Primary.TButton", foreground="#ffffff", padding=(s(24), s(4), s(24), s(6)))
     st.map("Primary.TButton", foreground=[("disabled", "#e6f2fa")])
     # toggles and radio orbs
-    for cls, ind in (("TCheckbutton", "Aero.toggle"), ("TRadiobutton", "Aero.radio")):
-        base = cls[1:]
-        st.layout(cls, [(f"{base}.padding", {"sticky": "nsew", "children": [
-            (ind, {"side": "left", "sticky": ""}), (f"{base}.label", {"side": "left", "sticky": "nsew"})]})])
+    for cls in ("TCheckbutton", "TRadiobutton"):
         st.configure(cls, background=PAGE, padding=(s(1), s(3)))
     st.configure("Title.TRadiobutton", font=(semi, 11))
     # text fields
-    st.layout("TEntry", [("Aero.field", {"sticky": "nsew", "children": [
-        ("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})]})])
     st.configure("TEntry", padding=(s(6), s(3)))
-    st.layout("TCombobox", [("Aero.field", {"sticky": "nsew", "children": [
-        ("Aero.arrow", {"side": "right", "sticky": ""}),
-        ("Combobox.padding", {"expand": "1", "sticky": "nsew", "children": [
-            ("Combobox.textarea", {"sticky": "nsew"})]})]})])
     st.configure("TCombobox", padding=(s(6), s(3)))
     st.map("TCombobox", fieldbackground=[("readonly", "white")], selectbackground=[("readonly", "white")],
            selectforeground=[("readonly", INK)])
-    st.layout("TSpinbox", [("Aero.field", {"sticky": "nsew", "children": [
-        ("null", {"side": "right", "sticky": "ns", "children": [
-            ("Spinbox.uparrow", {"side": "top", "sticky": "e"}),
-            ("Spinbox.downarrow", {"side": "bottom", "sticky": "e"})]}),
-        ("Spinbox.padding", {"sticky": "nsew", "children": [("Spinbox.textarea", {"sticky": "nsew"})]})]})])
     st.configure("TSpinbox", padding=(s(6), s(2)), arrowcolor=INK, arrowsize=s(10), lightcolor="white",
                  darkcolor="white", bordercolor="white")
     win.option_add("*TCombobox*Listbox.font", "{Segoe UI} 10")
@@ -221,10 +299,6 @@ def apply_aero_style(win, keep=None):
     win.option_add("*TCombobox*Listbox.background", "white")
     win.option_add("*TCombobox*Listbox.foreground", INK)
     # progress, slider, scrollbar
-    st.layout("Horizontal.TProgressbar", [("AeroBar.trough", {"sticky": "nsew", "children": [
-        ("AeroBar.pbar", {"side": "left", "sticky": "ns"})]})])
-    st.layout("Horizontal.TScale", [("AeroScale.trough", {"sticky": "nsew", "children": [
-        ("Aero.slider", {"side": "left", "sticky": ""})]})])
     st.layout("Page.Vertical.TScrollbar", [("AeroV.trough", {"sticky": "ns", "children": [
         ("AeroV.thumb", {"expand": "1", "sticky": "nsew"})]})])
     # lists and tables
@@ -257,6 +331,9 @@ def _card_restyle(st, w):
         return
     new = "Card." + style
     if new not in _CARD_STYLES:
+        lay = _CARD_LAYOUTS.get(style) or _CARD_LAYOUTS.get(cls)
+        if lay:   # the same control, drawn solid on white
+            st.layout(new, lay)
         st.configure(new, background=CARD)
         st.map(new, background=_SURFACE_STATES(CARD))
         _CARD_STYLES.add(new)
@@ -448,7 +525,10 @@ class SettingsWindow:
     def _side_motion(self, e):
         i = self._side_at(e)
         self._side_hover(i)
-        self.side.configure(cursor="hand2" if i is not None or self._on_link(e) else "")
+        cur = "hand2" if i is not None or self._on_link(e) else ""
+        if cur != getattr(self, "_side_cursor", ""):
+            self._side_cursor = cur
+            self.side.configure(cursor=cur)
 
     def _side_hover(self, i):
         if i == self.side_hot:
