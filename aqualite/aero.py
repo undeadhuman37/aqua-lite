@@ -84,8 +84,9 @@ def capsule_mask(size, box, radius):
     return m
 
 
-def glass_capsule(size, box, top=SKY_TOP, bottom=SKY_BOTTOM, glow=None, shadow=True):
-    """Returns (base, overlay): base = shadow + glass body, overlay = gloss + rims (drawn over contents)."""
+def glass_capsule(size, box, top=SKY_TOP, bottom=SKY_BOTTOM, glow=None, shadow=True, alpha=None):
+    """Returns (base, overlay): base = shadow + glass body, overlay = gloss + rims (drawn over contents).
+    alpha = (top, bottom) opacity makes the body see-through, for frosted glass over Windows' blur."""
     W, H = size
     x0, y0, x1, y1 = box
     h = y1 - y0
@@ -100,7 +101,8 @@ def glass_capsule(size, box, top=SKY_TOP, bottom=SKY_BOTTOM, glow=None, shadow=T
         layer = Image.new("RGBA", size, glow + (0,))
         layer.putalpha(g.point(lambda v: int(v * 0.75)))
         base = Image.alpha_composite(base, layer)
-    body = vgradient(x1 - x0, h, top, bottom)
+    body = vgradient(x1 - x0, h, tuple(top[:3]) + ((alpha[0],) if alpha else ()),
+                     tuple(bottom[:3]) + ((alpha[1],) if alpha else ()))
     base.paste(body, (x0, y0), capsule_mask((x1 - x0, h), (0, 0, x1 - x0 - 1, h - 1), r))
     # soft light bouncing up from the bottom (the "water" reflection)
     refl = vgradient(x1 - x0, h // 2, (120, 255, 255, 0), (170, 255, 255, 120))
@@ -211,6 +213,9 @@ class Bubbles:
 
 
 BARS = 14   # waveform slots in the Flow bar
+FROST_ALPHA = (125, 180)   # see-through glass body (top, bottom) when Windows blurs what's behind it
+VIOLET = ((222, 204, 255), (104, 54, 196))   # Command Mode glass
+LIGHT = {"command": (222, 186, 255), "default": (140, 255, 255)}   # the light that drifts with your voice
 
 
 class FlowBarRenderer:
@@ -218,8 +223,9 @@ class FlowBarRenderer:
 
     W, H = 440, 118   # extra room on top for the live caption
 
-    def __init__(self, scale=1.0):
-        self.scale = scale
+    def __init__(self, scale=1.0, frost=False):
+        self.scale, self.frost = scale, frost
+        self.frame_box = None   # where the main glass is in the last frame (2x canvas), for the blur under it
         self.size = (int(self.W * scale), int(self.H * scale))
         self.big = (self.size[0] * SS, self.size[1] * SS)
         self.cache = {}
@@ -232,6 +238,43 @@ class FlowBarRenderer:
     def _u(self, v):
         return int(v * self.scale * SS)
 
+    def set_frost(self, on):
+        """Switch between see-through frosted glass (Windows blurs behind it) and solid glass."""
+        if bool(on) != self.frost:
+            self.frost = bool(on)
+            self.cache.clear()
+
+    def blur_shape(self, inset=1.5):
+        """(x, y, w, h, radius) of the main glass in the last frame, in window pixels, pulled in a little so the
+        blur's hard edge hides under the glass rim. None when nothing is shown."""
+        if self.frame_box is None:
+            return None
+        x0, y0, x1, y1 = (v / SS for v in self.frame_box)
+        i = inset * self.scale
+        x0, y0, x1, y1 = int(round(x0 + i)), int(round(y0 + i)), int(round(x1 - i)), int(round(y1 - i))
+        return x0, y0, x1 - x0, y1 - y0, (y1 - y0) // 2
+
+    def _light(self, layer, state, t, level, period=2.4):
+        """A soft light that drifts back and forth inside the glass and brightens as you speak."""
+        w, h = layer.size
+        key = ("light", state, w, h)
+        if key not in self.cache:
+            lw, lh = int(w * 0.55), int(h * 1.5)
+            m = Image.new("L", (lw, lh), 0)
+            ImageDraw.Draw(m).ellipse((lw * 0.12, lh * 0.12, lw * 0.88, lh * 0.88), fill=150)
+            m = m.filter(ImageFilter.GaussianBlur(min(lw, lh) * 0.16))
+            sp = Image.new("RGBA", (lw, lh), LIGHT.get(state, LIGHT["default"]) + (0,))
+            sp.putalpha(m)
+            self.cache[key] = sp
+        sp = self.cache[key]
+        k = min(1.0, 0.4 + 0.75 * level)
+        if k < 0.99:
+            sp = sp.copy()
+            sp.putalpha(sp.getchannel("A").point(lambda v: int(v * k)))
+        drift = 0.5 - 0.5 * math.cos(2 * math.pi * t / period)
+        cx = w * (0.18 + 0.56 * drift + 0.06 * level)
+        _stamp(layer, sp, int(cx - sp.size[0] / 2), int(h * 0.72 - sp.size[1] / 2))
+
     def _box(self, w, h):
         W, H = self.big
         w, h = self._u(w), self._u(h)
@@ -243,6 +286,8 @@ class FlowBarRenderer:
         """Glass at 2x size: (box, base, over). Not cached itself: callers keep only the small pieces they need
         (full 2x canvases are ~2 MB each, and toasts come in every width)."""
         box = self._box(w, h)
+        if self.frost:
+            kw.setdefault("alpha", FROST_ALPHA)
         return (box,) + glass_capsule(self.big, box, **kw)
 
     def _cap_glass(self, w, h, above_y):
@@ -371,8 +416,10 @@ class FlowBarRenderer:
         self.last_t = t
         self.texts = []
         if state == "hidden":
+            self.frame_box = None
             return Image.new("RGBA", self.size, (0, 0, 0, 0))
         if state == "idle":
+            self.frame_box = self._box(60, 15)
             if "idle_img" not in self.cache:
                 box, base, over = self._glass(60, 15)
                 self.cache["idle_img"] = self._flat(base, over)
@@ -383,16 +430,20 @@ class FlowBarRenderer:
             glow = (170, 120, 255) if state == "command" else (90, 230, 255)
             orb_r = self._u(9)
             half = int(orb_r * 3.8)   # the pulsing glow reaches this far around the orb
+            tint = dict(top=VIOLET[0], bottom=VIOLET[1]) if state == "command" else {}
             live = self._live(("rec", state), w, 42,
-                              lambda b: max(SS * 2, half - self._u(22), half - (b[3] - b[1]) // 2) + SS, glow=glow)
+                              lambda b: max(SS * 2, half - self._u(22), half - (b[3] - b[1]) // 2) + SS, glow=glow,
+                              **tint)
             (rx, ry, _rx1, _ry1), patch_base, patch_over, _still, box = live
             x0, y0, x1, y1 = box
             cy = (y0 + y1) // 2
             orb_x = x0 + self._u(22)
             img = patch_base.copy()               # everything below is drawn in patch coordinates
+            self.frame_box = box
             lv = levels[-1] if levels else 0.0
             self.bubbles.step(box, lv, dt)
             layer = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+            self._light(layer, state, t, lv)
             self.bubbles.draw(layer, x0, y0)
             mkey = ("mask", state)
             if mkey not in self.cache:
@@ -419,9 +470,16 @@ class FlowBarRenderer:
         if state == "processing":
             live = self._live("proc", 100, 36, lambda b: SS * 3, glow=(90, 230, 255))
             (rx, ry, _rx1, _ry1), patch_base, patch_over, _still, box = live
+            self.frame_box = box
             x0, y0, x1, y1 = box
             cy = (y0 + y1) // 2
             img = patch_base.copy()
+            layer = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+            self._light(layer, "processing", t, 0.3, period=1.4)
+            if ("mask", "proc") not in self.cache:
+                self.cache["mask", "proc"] = capsule_mask(self.big, box, (box[3] - box[1]) // 2).crop(box)
+            layer.putalpha(ImageChops.multiply(layer.getchannel("A"), self.cache["mask", "proc"]))
+            img.alpha_composite(layer, (x0 - rx, y0 - ry))
             for i in range(3):
                 ph = t * 6.0 - i * 0.9
                 dy = -abs(math.sin(ph)) * self._u(6)
@@ -432,9 +490,10 @@ class FlowBarRenderer:
         # toast: nothing in it moves, so the finished picture is kept and reused while it slides / fades
         text = label[:64]
         key = ("toastimg", text, kind)
+        tw = self.font.getlength(text) / self.scale
+        w = min(self.W - 16, int(tw) + 64)
+        self.frame_box = self._box(w, 36)
         if key not in self.cache:
-            tw = self.font.getlength(text) / self.scale
-            w = min(self.W - 16, int(tw) + 64)
             box, base, over = self._glass(w, 36)
             img = base.copy()
             x0, y0, x1, y1 = box

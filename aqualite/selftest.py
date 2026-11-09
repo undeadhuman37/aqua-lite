@@ -370,12 +370,36 @@ def check_updater():
     assert updater.parse_version(updater.local_version()) > (0, 0, 0), "VERSION file missing"
 
 
+def check_look():
+    from . import aero, skin, ui
+    for maker in (lambda: skin.toggle(20, 1), lambda: skin.radio(18, 0), lambda: skin.field(40, 28, "focus"),
+                  lambda: skin.card(48, selected=True), lambda: skin.nav_pill(200, 38, "selected"),
+                  lambda: skin.icon("mic", 18), lambda: skin.button(44, 30, "pressed", True)):
+        im = maker()
+        assert im.mode == "RGBA" and im.getbbox(), "a Settings drawing came out empty"
+    assert {p[1] for p in ui.PAGES} >= {"Home", "History", "Instant text", "Private mode"}
+    assert all(ui.ALIASES[k] in {p[1] for p in ui.PAGES} for k in ui.ALIASES), "an old tab name points nowhere"
+    assert set(ui.HEADINGS) == {p[1] for p in ui.PAGES}
+    for frost in (False, True):
+        r = aero.FlowBarRenderer(1.0, frost=frost)
+        for st in ("idle", "recording", "command", "processing"):
+            r.render(st, "", [0.5] * (aero.BARS + 1), 1.0)
+            x, y, w, h, rad = r.blur_shape()
+            assert 0 <= x and 0 <= y and x + w <= r.size[0] and y + h <= r.size[1] and rad == h // 2
+        r.render("hidden")
+        assert r.blur_shape() is None
+    solid = aero.FlowBarRenderer(1.0).render("recording", "", [0.0] * 15, 0.0)
+    see = aero.FlowBarRenderer(1.0, frost=True).render("recording", "", [0.0] * 15, 0.0)
+    cx, cy = solid.size[0] // 2 + 40, solid.size[1] - 33
+    assert see.getpixel((cx, cy))[3] < solid.getpixel((cx, cy))[3] == 255, "frosted glass should be see-through"
+
+
 def main():
     for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
                      ("learning & screen context", check_learning), ("instant text", check_instant), ("edit by voice", check_voice_edit),
-                     ("private mode", check_private_mode),
+                     ("private mode", check_private_mode), ("new look", check_look),
                      ("problem report", check_report)):
         fn()
         print(f"ok  {name}")

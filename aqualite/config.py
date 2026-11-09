@@ -104,6 +104,7 @@ DEFAULTS = {
     # --- Behaviour ---
     "mic_device": "",                    # "" = Windows default input
     "sounds": True,
+    "frosted_glass": True,               # the Flow bar is see-through glass and Windows blurs what's behind it
     "show_idle_bar": False,              # False = the Flow bar only appears while you're dictating
     "whisper_boost": True,               # auto-gain for quiet / whispered speech
     "add_trailing_space": True,

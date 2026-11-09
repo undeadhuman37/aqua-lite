@@ -50,8 +50,9 @@ def _match(amount, up):
 
 
 class FlowBar:
-    def __init__(self, root, level_fn, on_click, show_idle=True):
+    def __init__(self, root, level_fn, on_click, show_idle=True, frost=True):
         self.root, self.level_fn, self.on_click = root, level_fn, on_click
+        self.frost, self.want_frost = None, frost
         self.show_idle = show_idle
         self.state, self.label, self.kind = "idle", "", "info"
         self.caption = ""   # live words while recording
@@ -97,6 +98,7 @@ class FlowBar:
                 winapi.user32.SetWindowLongPtrW(self.hwnd, -20, ex & ~0x00080000)
                 self.win.attributes("-transparentcolor", "#ff00fe")
                 winapi.make_overlay_window(self.win)
+        self.set_frost(frost)
         self._loop()
         self.warm = self.r.warm_steps()
         self.root.after(400, self._warm_next)
@@ -117,6 +119,25 @@ class FlowBar:
             pass
 
     # ---------------------------------------------------------------- public
+    def set_frost(self, on):
+        """Frosted glass: Windows blurs what's behind the bar and the glass turns see-through. Falls back to solid
+        glass when Windows can't (older Windows, or Transparency effects switched off)."""
+        self.want_frost = on
+        if on and self.frost is None and IS_WIN and self.layered:
+            from . import winapi
+            try:
+                if winapi.transparency_on():
+                    self.frost = winapi.Frost()
+            except Exception:
+                self.frost = None
+        elif not on and self.frost is not None:
+            self.frost.close()
+            self.frost = None
+        self.r.set_frost(self.frost is not None)
+        self.last_img = self.fade_from = None
+        self.dirty = True
+        self._wake()
+
     def set_caption(self, text):
         if text != self.caption:
             self.caption = text
@@ -305,6 +326,8 @@ class FlowBar:
             winapi.update_layered(self.hwnd, x, y, self.w, self.h, premultiplied_bgra(img))
             if keep:
                 winapi.user32.SetWindowPos(self.hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+            if self.frost is not None:
+                self._place_frost(x, y + offset, y + self.h, keep)
             return
         # fallback / non-Windows: composite over the key colour (hard edges) and show in the canvas
         from PIL import ImageTk
@@ -315,6 +338,25 @@ class FlowBar:
         self.c.delete("all")
         self.c.create_image(0, 0, image=self.photo, anchor="nw")
         self.win.geometry(f"+{x}+{y}")
+
+    def _place_frost(self, x, y, bottom, restack):
+        shape = self.r.blur_shape() if self.shown > 0 else None
+        try:
+            if shape is None:
+                self.frost.hide()
+            else:
+                bx, by, bw, bh, radius = shape
+                if restack:
+                    self.frost.rect = None   # re-tuck it right under the bar now and then
+                self.frost.place(self.hwnd, x + bx, y + by, bw, bh, radius, clip_bottom=bottom)
+        except Exception:   # never let the blur break the bar: drop to solid glass
+            try:
+                self.frost.close()
+            except Exception:
+                pass
+            self.frost = None
+            self.r.set_frost(False)
+            self.dirty = True
 
     def _position(self):
         if IS_WIN:

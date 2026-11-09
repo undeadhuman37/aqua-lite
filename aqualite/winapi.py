@@ -711,6 +711,7 @@ _proto(user32.EnumDisplaySettingsW, W.BOOL, W.LPCWSTR, W.DWORD, ctypes.POINTER(D
 try:
     dwmapi = ctypes.WinDLL("dwmapi")
     _proto(dwmapi.DwmGetCompositionTimingInfo, ctypes.c_long, W.HWND, ctypes.POINTER(DWM_TIMING_INFO))
+    _proto(dwmapi.DwmSetWindowAttribute, ctypes.c_long, W.HWND, W.DWORD, ctypes.c_void_p, W.DWORD)
 except OSError:
     dwmapi = None
 
@@ -796,3 +797,129 @@ def close_with_us(popen):
         _job = job
     if not kernel32.AssignProcessToJobObject(_job, HANDLE(int(popen._handle))):
         raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
+
+
+def tint_title_bar(hwnd, caption, text=None, border=None):
+    """Windows 11: colour a window's title bar, its title text and its edge (Windows 10 ignores this)."""
+    if not dwmapi:
+        return False
+    ok = True
+    for attr, rgb in ((35, caption), (36, text), (34, border)):   # DWMWA_CAPTION/TEXT/BORDER_COLOR
+        if rgb is None:
+            continue
+        val = W.DWORD(rgb[0] | (rgb[1] << 8) | (rgb[2] << 16))
+        ok = dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(val), 4) == 0 and ok
+    return ok
+
+
+# ------------------------------------------------------------------ frosted glass under the Flow bar
+class _ACCENT_POLICY(ctypes.Structure):
+    _fields_ = [("AccentState", W.DWORD), ("AccentFlags", W.DWORD), ("GradientColor", W.DWORD),
+                ("AnimationId", W.DWORD)]
+
+
+class _WINCOMPATTRDATA(ctypes.Structure):
+    _fields_ = [("Attribute", W.DWORD), ("Data", ctypes.c_void_p), ("SizeOfData", ctypes.c_size_t)]
+
+
+_WNDPROC = ctypes.WINFUNCTYPE(LRESULT, W.HWND, W.UINT, W.WPARAM, W.LPARAM)
+
+
+class _WNDCLASSW(ctypes.Structure):
+    _fields_ = [("style", W.UINT), ("lpfnWndProc", _WNDPROC), ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int), ("hInstance", HANDLE), ("hIcon", HANDLE), ("hCursor", HANDLE),
+                ("hbrBackground", HANDLE), ("lpszMenuName", W.LPCWSTR), ("lpszClassName", W.LPCWSTR)]
+
+
+_proto(user32.DefWindowProcW, LRESULT, W.HWND, W.UINT, W.WPARAM, W.LPARAM)
+_proto(user32.RegisterClassW, W.ATOM, ctypes.POINTER(_WNDCLASSW))
+_proto(user32.CreateWindowExW, W.HWND, W.DWORD, W.LPCWSTR, W.LPCWSTR, W.DWORD, ctypes.c_int, ctypes.c_int,
+       ctypes.c_int, ctypes.c_int, W.HWND, HANDLE, HANDLE, ctypes.c_void_p)
+_proto(user32.DestroyWindow, W.BOOL, W.HWND)
+_proto(user32.SetWindowRgn, ctypes.c_int, W.HWND, HANDLE, W.BOOL)
+_proto(gdi32.CreateRoundRectRgn, HANDLE, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+       ctypes.c_int)
+_proto(gdi32.GetStockObject, HANDLE, ctypes.c_int)
+_proto(kernel32.GetModuleHandleW, HANDLE, W.LPCWSTR)
+try:
+    _SetWCA = user32.SetWindowCompositionAttribute
+    _proto(_SetWCA, W.BOOL, W.HWND, ctypes.POINTER(_WINCOMPATTRDATA))
+except AttributeError:
+    _SetWCA = None
+_frost_class = None
+_frost_proc = _WNDPROC(lambda h, m, w, l: user32.DefWindowProcW(h, m, w, l))   # kept alive for the app's life
+
+
+def transparency_on():
+    """Windows' own 'Transparency effects' switch (Settings > Personalisation > Colours)."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+            return bool(winreg.QueryValueEx(k, "EnableTransparency")[0])
+    except OSError:
+        return True
+
+
+class Frost:
+    """A borderless window that sits right under the Flow bar's glass, shaped like the capsule, and asks Windows
+    to blur whatever is behind it. Windows' compositor does the blur on the graphics card, so it costs Aqua Lite
+    nothing per frame; the bar's own see-through glass, light and waveform are drawn on top."""
+    TINT = 0x30C87812   # AABBGGRR: a faint sky-blue wash in the blur
+
+    def __init__(self):
+        global _frost_class
+        if _SetWCA is None:
+            raise OSError("this Windows has no blur-behind")
+        inst = kernel32.GetModuleHandleW(None)
+        if _frost_class is None:
+            wc = _WNDCLASSW()
+            wc.lpfnWndProc = _frost_proc
+            wc.hInstance = inst
+            wc.hbrBackground = gdi32.GetStockObject(4)   # black: shows as fully see-through over the blur
+            wc.lpszClassName = "AquaLiteFrost"
+            if not user32.RegisterClassW(ctypes.byref(wc)):
+                raise OSError(ctypes.get_last_error(), "RegisterClass failed")
+            _frost_class = wc
+        ex = 0x00000080 | 0x08000000 | 0x00000008   # tool window (no taskbar button), never activates, topmost
+        self.hwnd = user32.CreateWindowExW(ex, "AquaLiteFrost", "", 0x80000000, -20000, -20000, 1, 1,
+                                           None, None, inst, None)
+        if not self.hwnd:
+            raise OSError(ctypes.get_last_error(), "CreateWindowEx failed")
+        policy = _ACCENT_POLICY(3, 2, self.TINT, 0)   # ACCENT_ENABLE_BLURBEHIND, with the tint
+        data = _WINCOMPATTRDATA(19, ctypes.addressof(policy), ctypes.sizeof(policy))
+        if not _SetWCA(self.hwnd, ctypes.byref(data)):
+            user32.DestroyWindow(self.hwnd)
+            raise OSError("blur-behind was refused")
+        self.shape, self.rect, self.visible = None, None, False
+
+    def place(self, above, x, y, w, h, radius, clip_bottom=None):
+        """Put the blur under window `above` at (x, y, w, h) on screen, rounded by `radius`; anything below
+        clip_bottom is left out (the bar tucks under the screen edge when it slides)."""
+        vis_h = h if clip_bottom is None else min(h, clip_bottom - y)
+        if vis_h <= 2 or w <= 2:
+            self.hide()
+            return
+        shape = (w, h, radius)
+        if shape != self.shape:
+            d = max(2, 2 * radius)
+            rgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, d, d)
+            if user32.SetWindowRgn(self.hwnd, rgn, True):
+                self.shape = shape
+            else:
+                gdi32.DeleteObject(rgn)
+        rect = (x, y, w, vis_h)
+        if rect == self.rect and self.visible:
+            return   # nothing moved
+        user32.SetWindowPos(self.hwnd, above, x, y, w, vis_h, 0x0010 | 0x0040)   # just under the bar, no activate
+        self.rect, self.visible = rect, True
+
+    def hide(self):
+        if self.visible:
+            user32.SetWindowPos(self.hwnd, None, 0, 0, 0, 0, 0x0080 | 0x0001 | 0x0002 | 0x0004 | 0x0010)
+            self.visible = False
+
+    def close(self):
+        if self.hwnd:
+            user32.DestroyWindow(self.hwnd)
+            self.hwnd = None

@@ -47,7 +47,8 @@ class App:
             self.root.iconbitmap(default=self.icon_path)
         except tk.TclError as e:
             log.info("window icon not set: %s", e)
-        self.bar = FlowBar(self.root, lambda: self.recorder.level, self._bar_clicked, self.cfg.get("show_idle_bar", False))
+        self.bar = FlowBar(self.root, lambda: self.recorder.level, self._bar_clicked, self.cfg.get("show_idle_bar", False),
+                           self.cfg.get("frosted_glass", True))
         self.live = live.LiveCaption(self.recorder, self.cfg, lambda text: self.post("caption", text))
         self.learner = learn.Learner(lambda words: self.post("learned", words), on_edited=self._edited)
         self.edit_where = ("", "other")   # app + category of the dictation being watched for edits
@@ -517,10 +518,7 @@ class App:
             self.settings.win.lift()
         else:
             self.settings = SettingsWindow(self.root, self)
-        if isinstance(tab, str):  # by name, so adding tabs never breaks it
-            names = [self.settings.nb.tab(t, "text") for t in self.settings.nb.tabs()]
-            tab = names.index(tab) if tab in names else 0
-        self.settings.nb.select(tab)
+        self.settings.show(tab)   # a page number or name; old tab names still work
         w = self.settings.win  # bring it to the front even when opened from the tray / Start menu
         w.attributes("-topmost", True)
         w.after(400, lambda: w.attributes("-topmost", False))
@@ -533,6 +531,8 @@ class App:
         self.cfg.save()
         self.machine.configure(self.cfg)
         self.bar.show_idle = self.cfg.get("show_idle_bar", False)
+        if self.cfg.get("frosted_glass", True) != self.bar.want_frost:
+            self.bar.set_frost(self.cfg.get("frosted_glass", True))
         self.bar.set_state(self.bar.state if self.bar.state != "toast" else "idle")
         if IS_WIN and old_startup != self.cfg.get("launch_at_startup"):
             winapi.set_startup(self.cfg["launch_at_startup"], os.path.join(HERE, "AquaLite.pyw"), self.icon_path)

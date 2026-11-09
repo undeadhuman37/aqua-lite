@@ -1,4 +1,4 @@
-"""Settings / dashboard window."""
+"""Settings / dashboard window: a glassy sidebar of pages, each page a scrolling column of cards."""
 import datetime
 import os
 import subprocess
@@ -8,7 +8,7 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import aero, gpu, history, hotkeys, llm, localai, memory, music, stt
+from . import aero, gpu, history, hotkeys, llm, localai, memory, music, skin, stt
 from .config import APP_NAME, VERSION
 
 LANGS = [("auto", "Auto-detect"), ("en", "English"), ("ar", "Arabic"), ("fr", "French"), ("es", "Spanish"),
@@ -38,103 +38,543 @@ def _pair_combo(parent, pairs, value, width=28):
     return cb
 
 
-BG, PANEL, INK, MUTED, ACCENT = "#eaf6ff", "#f7fcff", "#0b3d63", "#4d7391", "#0a84c6"
-_BUTTON_IMAGES = {}
+PAGE, CARD, INK, MUTED, ACCENT = skin.hexrgb(skin.PAGE), "#ffffff", "#0b3d63", "#3f6987", "#0a84c6"
+BG = PAGE
+REPO_URL = "https://github.com/undeadhuman37/aqua-lite"
+
+# sidebar: (group, page name, icon, the builders that fill the page)
+PAGES = (
+    ("General", "Home", "home", ("_home",)),
+    ("General", "Dictation", "mic", ("_general",)),
+    ("General", "Instant text", "bolt", ("_instant",)),
+    ("Intelligence", "Speech & AI", "sparkle", ("_ai",)),
+    ("Intelligence", "Private mode", "lock", ("_private",)),
+    ("Intelligence", "Style & memory", "brush", ("_style", "_memory")),
+    ("Personal", "Words & snippets", "lines", ("_dictionary", "_snippets")),
+    ("Personal", "Music", "music", ("_music",)),
+    ("Personal", "History", "clock", ("_history",)),
+)
+HEADINGS = {
+    "Home": ("Hold the shortcut, talk, let go", "Your words go wherever your cursor is"),
+    "Dictation": ("Dictation", "Shortcuts, microphone and how dictating behaves"),
+    "Instant text": ("Instant text", "Words appear while you talk, then the polished version replaces them when you "
+                                     "let go. Only pick an option if you have what it needs."),
+    "Speech & AI": ("Speech & AI", "The engines that turn your voice into text and tidy it up"),
+    "Private mode": ("Private mode", "Your voice and text never leave this PC. No account, no key, works offline."),
+    "Style & memory": ("Style & memory", "How you sound in each kind of app, and what Aqua Lite has learned from "
+                                         "your edits"),
+    "Words & snippets": ("Words & snippets", "Spellings, replacements and phrases that expand into longer text"),
+    "Music": ("Music", "Soft music from your own songs while you dictate"),
+    "History": ("History", "Your recent dictations. Double-click one to copy it."),
+}
+ALIASES = {"Shortcuts & mic": "Dictation", "Private": "Private mode", "Style": "Style & memory",
+           "Memory": "Style & memory", "Dictionary": "Words & snippets", "Snippets": "Words & snippets"}
+CONTAINERS = ("Panel.TFrame", "Pick.TFrame", "PickOn.TFrame", "Tile.TFrame")   # white cards
+_IN_CARD = {"TLabel", "TCheckbutton", "TRadiobutton", "TFrame", "TButton", "TEntry", "TCombobox", "TSpinbox",
+            "TScale", "TProgressbar"}
+_IMAGES = {}   # ttk image elements: created once and kept for the app's lifetime (ttk keeps using them)
+_CARD_STYLES = set()
 
 
-def apply_aero_style(win, keep):
-    """Frutiger Aero ttk theme: sky-tinted panels, glossy aqua buttons, Segoe UI."""
+def _SURFACE_STATES(colour):  # noqa: N802
+    return [(state, colour) for state in ("disabled", "pressed", "active", "readonly", "focus")]
+
+
+def _scale(win):
+    """Screen scaling (1.0 at 100 %, 1.5 at 150 %...): the art is drawn at this size so it stays crisp."""
+    try:
+        return max(1.0, min(3.0, win.winfo_fpixels("1i") / 96.0))
+    except tk.TclError:
+        return 1.0
+
+
+def _make_elements(st, root, sc):
+    """Draw every themed piece once (at the screen's scale) and register it as a ttk image element."""
     from PIL import ImageTk
+
+    def s(v):
+        return max(1, int(round(v * sc)))
+
+    def P(key, im):
+        _IMAGES[key] = ImageTk.PhotoImage(im, master=root)
+        return _IMAGES[key]
+
+    def el(name, base, *states, **kw):
+        st.element_create(name, "image", base, *states, **kw)
+
+    bw, bh = s(44), s(30)   # small, so short labels get snug buttons (ttk stretches the middle)
+    for kind, primary in (("btn", False), ("pri", True)):
+        im = {k: P(f"{kind}_{k}", skin.button(bw, bh, k, primary)) for k in ("normal", "active", "pressed", "disabled")}
+        el("Aero.primary" if primary else "Aero.button", im["normal"], ("disabled", im["disabled"]),
+           ("pressed", im["pressed"]), ("active", im["active"]), border=(s(15), s(12), s(15), s(15)),
+           padding=(s(2), s(1), s(2), s(3)), sticky="nsew")
+    th, rh = s(20), s(18)
+    t = {(on, k): P(f"tg_{on}_{k}", skin.toggle(th, on, k, gap=s(8))) for on in (0, 1)
+         for k in ("normal", "active", "disabled")}
+    el("Aero.toggle", t[0, "normal"], ("disabled selected", t[1, "disabled"]), ("disabled", t[0, "disabled"]),
+       ("selected", t[1, "normal"]), ("active", t[0, "active"]), sticky="")
+    r = {(on, k): P(f"rd_{on}_{k}", skin.radio(rh, on, k, gap=s(8))) for on in (0, 1)
+         for k in ("normal", "active", "disabled")}
+    el("Aero.radio", r[0, "normal"], ("disabled selected", r[1, "disabled"]), ("disabled", r[0, "disabled"]),
+       ("selected", r[1, "normal"]), ("active", r[0, "active"]), sticky="")
+    fw, fh = s(40), s(28)
+    f = {k: P(f"fld_{k}", skin.field(fw, fh, k)) for k in ("normal", "active", "focus", "disabled")}
+    el("Aero.field", f["normal"], ("disabled", f["disabled"]), ("focus", f["focus"]), ("active", f["active"]),
+       border=s(8), padding=s(3), sticky="nsew")
+    a = {k: P(f"arr_{k}", skin.arrow(s(24), s(22), k)) for k in ("normal", "active", "disabled")}
+    el("Aero.arrow", a["normal"], ("disabled", a["disabled"]), ("active", a["active"]), sticky="")
+    ph = s(16)
+    el("AeroBar.trough", P("ptrough", skin.progress_trough(s(120), ph)), border=(s(8), s(7), s(8), s(7)),
+       padding=s(2), sticky="nsew")
+    el("AeroBar.pbar", P("pbar", skin.progress_bar(s(40), ph - 2 * s(2))), border=(s(6), s(5), s(6), s(5)),
+       sticky="nsew")
+    sh = s(22)
+    el("AeroScale.trough", P("strough", skin.scale_trough(s(120), sh)), border=(s(10), 0, s(10), 0), sticky="nsew")
+    sl = {k: P(f"sl_{k}", skin.slider(sh, k)) for k in ("normal", "active", "pressed")}
+    el("Aero.slider", sl["normal"], ("pressed", sl["pressed"]), ("active", sl["active"]), sticky="")
+    tb = {k: P(f"th_{k}", skin.thumb(s(12), s(48), k)) for k in ("normal", "active", "pressed")}
+    el("AeroV.thumb", tb["normal"], ("pressed", tb["pressed"]), ("active", tb["active"]),
+       border=(0, s(7), 0, s(7)), sticky="nsew")
+    from PIL import Image
+    el("AeroV.trough", P("vtrough", Image.new("RGBA", (s(12), s(12)), (0, 0, 0, 0))), sticky="nsew")
+    cs = s(48)
+    pad = (s(4), s(3), s(4), s(5))   # keeps children off the rounded edge and the shadow
+    el("Aero.card", P("card", skin.card(cs, radius=12)), border=s(18), padding=pad, sticky="nsew")
+    el("Aero.cardsel", P("cardsel", skin.card(cs, radius=12, selected=True)), border=s(18), padding=pad,
+       sticky="nsew")
+    for name, (fill, _ink) in skin.PILLS.items():
+        el(f"Aero.pill.{name}", P(f"pill_{name}", skin.pill(s(40), s(22), fill)), border=(s(11), s(5), s(11), s(5)),
+           padding=(s(10), s(2), s(10), s(3)), sticky="nsew")
+    el("Aero.key", P("key", skin.keycap(s(28), s(24))), border=(s(7), s(5), s(7), s(8)),
+       padding=(s(7), s(2), s(7), s(4)), sticky="nsew")
+
+
+def apply_aero_style(win, keep=None):
+    """Frutiger Aero ttk theme: glossy aqua buttons, glass toggles and orbs, white cards on a pale sky page."""
     st = ttk.Style(win)
     st.theme_use("clam")
+    sc = _scale(win)
+
+    def s(v):
+        return max(1, int(round(v * sc)))
     font = ("Segoe UI", 10)
-    win.configure(bg=BG)
-    st.configure(".", background=BG, foreground=INK, font=font, fieldbackground="white", bordercolor="#9fd0ee",
-                 lightcolor="#ffffff", darkcolor="#b9dcf2", troughcolor="#d6ecfa", focuscolor=ACCENT)
-    st.configure("TFrame", background=BG)
-    st.configure("TLabel", background=BG, foreground=INK)
-    st.configure("TLabelframe", background=BG, bordercolor="#9fd0ee", relief="solid")
-    st.configure("TLabelframe.Label", background=BG, foreground=ACCENT, font=("Segoe UI Semibold", 10))
-    st.configure("TCheckbutton", background=BG)
-    st.configure("TRadiobutton", background=BG)
-    st.map("TCheckbutton", background=[("active", BG)])
-    st.map("TRadiobutton", background=[("active", BG)])
-    st.configure("TNotebook", background=BG, bordercolor="#9fd0ee", tabmargins=(6, 6, 6, 0))
-    st.configure("TNotebook.Tab", background="#cfe9fa", foreground=INK, padding=(12, 5), bordercolor="#9fd0ee")
-    st.map("TNotebook.Tab", background=[("selected", "white"), ("active", "#e3f4ff")],
-           foreground=[("selected", ACCENT)])
-    st.configure("Treeview", background="white", fieldbackground="white", rowheight=24, bordercolor="#9fd0ee")
-    st.configure("Treeview.Heading", background="#d9effc", foreground=INK, font=("Segoe UI Semibold", 9))
+    semi = "Segoe UI Semibold"
+    win.configure(bg=PAGE)
+    st.configure(".", background=PAGE, foreground=INK, font=font, fieldbackground="white", bordercolor="#9fd0ee",
+                 lightcolor="#ffffff", darkcolor="#b9dcf2", troughcolor="#d6ecfa", focuscolor=ACCENT,
+                 selectbackground="#bfe6ff", selectforeground=INK, insertcolor=INK)
+    st.map(".", foreground=[("disabled", "#8fa9bd")])
+    for name in (".", "TButton", "Primary.TButton", "TCheckbutton", "TRadiobutton", "TEntry", "TCombobox",
+                 "TSpinbox", "Horizontal.TScale", "Horizontal.TProgressbar", "TLabel"):
+        st.map(name, background=_SURFACE_STATES(PAGE))
+    if not _IMAGES:
+        _make_elements(st, win._root(), sc)
+    st.configure("TFrame", background=PAGE)
+    st.configure("TLabel", background=PAGE, foreground=INK)
+    for name, extra in (("H1.TLabel", dict(font=(semi, 19))), ("Sub.TLabel", dict(font=("Segoe UI", 11),
+                                                                                    foreground=MUTED)),
+                        ("CardHead.TLabel", dict(font=(semi, 11))), ("Strong.TLabel", dict(font=(semi, 10))),
+                        ("Eyebrow.TLabel", dict(font=(semi, 9), foreground="#34607f")),
+                        ("Stat.TLabel", dict(font=(semi, 20), foreground=ACCENT)),
+                        ("Muted.TLabel", dict(foreground=MUTED)), ("Warn.TLabel", dict(foreground="#b45309"))):
+        st.configure(name, **extra)
+    for name in CONTAINERS[:3]:
+        st.layout(name, [("Aero.cardsel" if name == "PickOn.TFrame" else "Aero.card", {"sticky": "nsew"})])
+    st.layout("Tile.TFrame", [("Aero.card", {"sticky": "nsew"})])
+    st.configure("Line.TFrame", background="#cfe6f6")
+    # buttons
+    inner = [("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]
+    st.layout("TButton", [("Aero.button", {"sticky": "nsew", "children": inner})])
+    st.layout("Primary.TButton", [("Aero.primary", {"sticky": "nsew", "children": inner})])
+    st.configure("TButton", padding=(s(16), s(4), s(16), s(6)), foreground="#063a5e", font=(semi, 10),
+                 anchor="center", width=-6)   # clam forces 11-character buttons; let them fit their words
+    st.configure("Primary.TButton", foreground="#ffffff", padding=(s(24), s(4), s(24), s(6)))
+    st.map("Primary.TButton", foreground=[("disabled", "#e6f2fa")])
+    # toggles and radio orbs
+    for cls, ind in (("TCheckbutton", "Aero.toggle"), ("TRadiobutton", "Aero.radio")):
+        base = cls[1:]
+        st.layout(cls, [(f"{base}.padding", {"sticky": "nsew", "children": [
+            (ind, {"side": "left", "sticky": ""}), (f"{base}.label", {"side": "left", "sticky": "nsew"})]})])
+        st.configure(cls, background=PAGE, padding=(s(1), s(3)))
+    st.configure("Title.TRadiobutton", font=(semi, 11))
+    # text fields
+    st.layout("TEntry", [("Aero.field", {"sticky": "nsew", "children": [
+        ("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})]})])
+    st.configure("TEntry", padding=(s(6), s(3)))
+    st.layout("TCombobox", [("Aero.field", {"sticky": "nsew", "children": [
+        ("Aero.arrow", {"side": "right", "sticky": ""}),
+        ("Combobox.padding", {"expand": "1", "sticky": "nsew", "children": [
+            ("Combobox.textarea", {"sticky": "nsew"})]})]})])
+    st.configure("TCombobox", padding=(s(6), s(3)))
+    st.map("TCombobox", fieldbackground=[("readonly", "white")], selectbackground=[("readonly", "white")],
+           selectforeground=[("readonly", INK)])
+    st.layout("TSpinbox", [("Aero.field", {"sticky": "nsew", "children": [
+        ("null", {"side": "right", "sticky": "ns", "children": [
+            ("Spinbox.uparrow", {"side": "top", "sticky": "e"}),
+            ("Spinbox.downarrow", {"side": "bottom", "sticky": "e"})]}),
+        ("Spinbox.padding", {"sticky": "nsew", "children": [("Spinbox.textarea", {"sticky": "nsew"})]})]})])
+    st.configure("TSpinbox", padding=(s(6), s(2)), arrowcolor=INK, arrowsize=s(10), lightcolor="white",
+                 darkcolor="white", bordercolor="white")
+    win.option_add("*TCombobox*Listbox.font", "{Segoe UI} 10")
+    win.option_add("*TCombobox*Listbox.selectBackground", "#bfe6ff")
+    win.option_add("*TCombobox*Listbox.selectForeground", INK)
+    win.option_add("*TCombobox*Listbox.background", "white")
+    win.option_add("*TCombobox*Listbox.foreground", INK)
+    # progress, slider, scrollbar
+    st.layout("Horizontal.TProgressbar", [("AeroBar.trough", {"sticky": "nsew", "children": [
+        ("AeroBar.pbar", {"side": "left", "sticky": "ns"})]})])
+    st.layout("Horizontal.TScale", [("AeroScale.trough", {"sticky": "nsew", "children": [
+        ("Aero.slider", {"side": "left", "sticky": ""})]})])
+    st.layout("Page.Vertical.TScrollbar", [("AeroV.trough", {"sticky": "ns", "children": [
+        ("AeroV.thumb", {"expand": "1", "sticky": "nsew"})]})])
+    # lists and tables
+    st.configure("Treeview", background="white", fieldbackground="white", rowheight=s(26), bordercolor="#cfe6f6",
+                 lightcolor="#cfe6f6", darkcolor="#cfe6f6")
+    st.configure("Treeview.Heading", background="#e3f3fd", foreground=INK, font=(semi, 9), relief="flat",
+                 bordercolor="#cfe6f6", lightcolor="#f3faff", darkcolor="#cfe6f6", padding=(s(6), s(3)))
+    st.map("Treeview.Heading", background=[("active", "#d2ecfb")])
     st.map("Treeview", background=[("selected", "#bfe6ff")], foreground=[("selected", INK)])
-    st.configure("Horizontal.TScale", background=BG, troughcolor="#cde9fb")
-    st.configure("Tile.TFrame", background="white", bordercolor="#9fd0ee", relief="solid")
-    st.configure("Tile.TLabel", background="white")
-    st.configure("Muted.TLabel", foreground=MUTED)
-    # The button images must live as long as the app: ttk keeps using them for every later window,
-    # so they are created once and held at module level (not by the window, which gets garbage-collected).
-    if not _BUTTON_IMAGES:
-        root = win._root()
-        _BUTTON_IMAGES.update({k: ImageTk.PhotoImage(aero.glossy_button(96, 30, k), master=root)
-                               for k in ("normal", "active", "pressed")})
-        imgs = _BUTTON_IMAGES
-        st.element_create("Aero.button", "image", imgs["normal"], ("pressed", imgs["pressed"]),
-                          ("active", imgs["active"]), border=(15, 14, 15, 14), sticky="nsew")
-    st.layout("TButton", [("Aero.button", {"sticky": "nsew", "children": [
-        ("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]})])
-    st.configure("TButton", padding=(16, 3), foreground="#063a5e", font=("Segoe UI Semibold", 10), anchor="center")
+    # tags
+    for name, (_fill, ink) in skin.PILLS.items():
+        sty = f"{name.title()}Pill.TLabel"
+        st.layout(sty, [(f"Aero.pill.{name}", {"sticky": "nsew", "children": [("Label.label", {"sticky": "nsew"})]})])
+        st.configure(sty, foreground=skin.hexrgb(ink), font=(semi, 9), background=CARD)
+    st.layout("Key.TLabel", [("Aero.key", {"sticky": "nsew", "children": [("Label.label", {"sticky": "nsew"})]})])
+    st.configure("Key.TLabel", font=("Consolas", 10, "bold"), foreground=INK, background=CARD)
+    st.configure("TLabelframe", background=PAGE, bordercolor="#bfe0f5")
+    st.configure("TLabelframe.Label", background=PAGE, foreground=INK, font=(semi, 11))
+    return st
+
+
+def _card_restyle(st, w):
+    """A widget sitting on a white card gets a 'Card.' copy of its style with a white background (ttk can't see
+    through to the card, so a page-coloured label would show as a blue box)."""
+    cls = w.winfo_class()
+    style = str(w.cget("style"))
+    if not style:
+        style = f"{str(w.cget('orient')).title()}.{cls}" if cls in ("TScale", "TProgressbar") else cls
+    if style.startswith("Card.") or style.endswith("Pill.TLabel") or style == "Key.TLabel":
+        return
+    new = "Card." + style
+    if new not in _CARD_STYLES:
+        st.configure(new, background=CARD)
+        st.map(new, background=_SURFACE_STATES(CARD))
+        _CARD_STYLES.add(new)
+    w.configure(style=new)
+
+
+def _key_name(k):
+    k = k.strip().lower()
+    names = {"ctrl": "Ctrl", "win": "Win", "alt": "Alt", "shift": "Shift", "space": "Space", "esc": "Esc",
+             "escape": "Esc", "enter": "Enter", "tab": "Tab", "rctrl": "Right Ctrl", "lctrl": "Left Ctrl",
+             "ralt": "Right Alt", "lalt": "Left Alt", "rshift": "Right Shift", "lshift": "Left Shift",
+             "capslock": "Caps Lock", "backspace": "Backspace"}
+    return names.get(k, k.upper() if len(k) <= 3 else k.title())
+
+
+class _Pages:
+    """The old Notebook calls (select, index, tabs, tab), so code that still speaks in tabs keeps working."""
+
+    def __init__(self, window):
+        self.w = window
+
+    def select(self, tab):
+        self.w.show(tab)
+
+    def index(self, what="current"):
+        names = self.w.page_names
+        return names.index(self.w.current) if what == "current" else names.index(ALIASES.get(what, what))
+
+    def tabs(self):
+        return list(self.w.page_names)
+
+    def tab(self, t, _option="text"):
+        return t if isinstance(t, str) else self.w.page_names[t]
 
 
 class SettingsWindow:
     def __init__(self, root, app):
         self.app, self.cfg = app, app.cfg
         self.win = tk.Toplevel(root)
-        self.win.title(f"{APP_NAME} {VERSION}")
-
+        self.win.title(f"{APP_NAME} {VERSION} - Settings")
         try:
             self.win.iconbitmap(app.icon_path)
         except Exception:
             pass
         self.v = {}
         self._imgs = []
-        apply_aero_style(self.win, self._imgs)
-        # size for the screen's scaling (125%, 150%...) so the bottom buttons are never cut off
-        sc = max(1.0, self.win.winfo_fpixels("1i") / 96.0)
-        w, h = int(820 * sc), int(720 * sc)  # noqa: re-checked against content size below
-        h = min(h, self.win.winfo_screenheight() - int(60 * sc))
+        self.style = apply_aero_style(self.win, self._imgs)
+        self.sc = _scale(self.win)
+        s = self._s
+        self.wrap = s(640)
+        w, h = s(1010), s(730)
+        h = min(h, self.win.winfo_screenheight() - s(70))
+        w = min(w, self.win.winfo_screenwidth() - s(40))
         self.win.geometry(f"{w}x{h}")
-        self.win.minsize(int(700 * sc), int(560 * sc))
-        try:
-            from PIL import ImageTk
-            ban = ImageTk.PhotoImage(aero.sky_banner(820, 96), master=self.win)
-            self._imgs.append(ban)
-            tk.Label(self.win, image=ban, bd=0, bg=BG).pack(fill="x")
-        except Exception:
-            pass
-        nb = ttk.Notebook(self.win)
-        nb.pack(fill="both", expand=True, padx=10, pady=(8, 0))
-        self.nb = nb
-        for title, build in (("Home", self._home), ("Shortcuts & mic", self._general),
-                             ("Speech & AI", self._ai), ("Instant text", self._instant), ("Private", self._private),
-                             ("Style", self._style), ("Memory", self._memory),
-                             ("Music", self._music),
-                             ("Dictionary", self._dictionary), ("Snippets", self._snippets),
-                             ("History", self._history)):
-            f = ttk.Frame(nb, padding=14)
-            nb.add(f, text=title)
-            build(f)
-        bar = ttk.Frame(self.win, padding=10)
+        self.win.minsize(min(w, s(860)), min(h, s(540)))
+        self.win.columnconfigure(1, weight=1)
+        self.win.rowconfigure(0, weight=1)
+        self._build_sidebar()
+        self.content = ttk.Frame(self.win)
+        self.content.grid(row=0, column=1, sticky="nsew")
+        self.content.rowconfigure(0, weight=1)
+        self.content.columnconfigure(0, weight=1)
+        self.pages, self.page_names, self.current = {}, [], None
+        for _group, name, _icon, builders in PAGES:
+            self.page_names.append(name)
+            self.pages[name] = self._make_page(name, builders)
+        foot = ttk.Frame(self.win)
+        foot.grid(row=1, column=1, sticky="ew")
+        ttk.Frame(foot, style="Line.TFrame", height=1).pack(fill="x")
+        bar = ttk.Frame(foot, padding=(s(24), s(10), s(24), s(12)))
         bar.pack(fill="x")
-        ttk.Button(bar, text="Save", command=self.save).pack(side="right")
-        ttk.Button(bar, text="Close", command=self.win.destroy).pack(side="right", padx=6)
-        self.status = ttk.Label(bar, text="", foreground="#666")
+        ttk.Button(bar, text="Save", style="Primary.TButton", command=self.save).pack(side="right")
+        ttk.Button(bar, text="Close", command=self.win.destroy).pack(side="right", padx=s(8))
+        self.status = ttk.Label(bar, text="", style="Muted.TLabel")
         self.status.pack(side="left")
-        # grow the window to fit its content (fonts are bigger on 125%/150% scaled screens)
-        self.win.update_idletasks()
-        need_w, need_h = self.win.winfo_reqwidth(), self.win.winfo_reqheight()
-        max_h = self.win.winfo_screenheight() - 80
-        self.win.geometry(f"{max(w, need_w)}x{min(max(h, need_h + 10), max_h)}")
+        self._restyle(self.win)
+        self.nb = _Pages(self)
+        self.show(0)
+        self._wheel_acc = 0
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self.win.bind(seq, self._wheel, add="+")
+            for cls in ("TCombobox", "TSpinbox"):   # scrolling the page must never flip a setting by accident
+                self.win.bind_class(cls, seq, lambda _e: None)
+        self.win.bind("<Control-Tab>", lambda _e: self._step(1))
+        for seq in ("<Control-Shift-Tab>", "<Control-ISO_Left_Tab>"):
+            try:
+                self.win.bind(seq, lambda _e: self._step(-1))
+            except tk.TclError:
+                pass
+        self._tint_title()
         self.win.lift()
         self.win.focus_force()
+
+    # ------------------------------------------------------------------ frame
+    def _s(self, v):
+        return max(1, int(round(v * self.sc)))
+
+    def _keep(self, img):
+        self._imgs.append(img)
+        return img
+
+    def _tint_title(self):
+        """Windows 11 colours the title bar to match (Windows 10 keeps its own)."""
+        if sys.platform != "win32":
+            return
+        try:
+            from . import winapi
+            self.win.update_idletasks()
+            hwnd = winapi.user32.GetParent(self.win.winfo_id()) or self.win.winfo_id()
+            winapi.tint_title_bar(hwnd, (64, 166, 229), (255, 255, 255), (11, 106, 168))
+        except Exception:
+            pass
+
+    def _build_sidebar(self):
+        from PIL import ImageTk
+        s = self._s
+        self.side_w = sw = s(224)
+        cv = tk.Canvas(self.win, width=sw, highlightthickness=0, bd=0, bg=skin.hexrgb(skin.SIDEBAR[1]))
+        cv.grid(row=0, column=0, rowspan=2, sticky="ns")
+        self.side = cv
+
+        def P(im):
+            return self._keep(ImageTk.PhotoImage(im, master=self.win))
+        self.side_bg = cv.create_image(0, 0, anchor="nw")
+        x, y = s(18), s(20)
+        cv.create_image(x, y, image=P(aero.app_icon(s(32))), anchor="nw")
+        cv.create_text(x + s(42), y + s(1), text=APP_NAME, anchor="nw", font=("Segoe UI Semibold", 13), fill=INK)
+        cv.create_text(x + s(42), y + s(21), text="Settings", anchor="nw", font=("Segoe UI", 9), fill=MUTED)
+        y += s(58)
+        pw, ph = sw - s(24), s(38)
+        sel_img, hot_img = P(skin.nav_pill(pw, ph, "selected")), P(skin.nav_pill(pw, ph, "hover"))
+        self.nav, group = [], None
+        mid = ph // 2 - s(1)
+        for i, (g, name, ic, _b) in enumerate(PAGES):
+            if g != group:
+                group = g
+                y += s(10) if i else 0
+                cv.create_text(s(24), y, text=g, anchor="nw", font=("Segoe UI Semibold", 9), fill="#34607f")
+                y += s(19)
+            item = {"y0": y, "y1": y + ph,
+                    "hot": cv.create_image(s(12), y, image=hot_img, anchor="nw", state="hidden"),
+                    "sel": cv.create_image(s(12), y, image=sel_img, anchor="nw", state="hidden"),
+                    "icons": (P(skin.icon(ic, s(18))), P(skin.icon(ic, s(18), (255, 255, 255))))}
+            item["icon"] = cv.create_image(s(28), y + mid, image=item["icons"][0], anchor="w")
+            item["shade"] = cv.create_text(s(56), y + mid + 1, text=name, anchor="w", fill="#0b5f99",
+                                           font=("Segoe UI Semibold", 10), state="hidden")
+            item["text"] = cv.create_text(s(56), y + mid, text=name, anchor="w", fill=INK, font=("Segoe UI", 10))
+            self.nav.append(item)
+            y += ph + s(2)
+        self.side_need = y + s(56)
+        self.side_ver = cv.create_text(s(24), 0, text=f"Version {VERSION}", anchor="sw", font=("Segoe UI", 9),
+                                       fill=MUTED)
+        self.side_link = cv.create_text(s(24), 0, text="Aqua Lite on GitHub", anchor="sw",
+                                        font=("Segoe UI", 9, "underline"), fill=ACCENT)
+        self.side_hot, self.side_sel = None, None
+        cv.bind("<Configure>", self._side_resize)
+        cv.bind("<Motion>", self._side_motion)
+        cv.bind("<Leave>", lambda _e: self._side_hover(None))
+        cv.bind("<Button-1>", self._side_click)
+
+    def _side_resize(self, e):
+        from PIL import ImageTk
+        if getattr(self, "_side_h", None) == e.height:
+            return
+        self._side_h = h = e.height
+        self._side_img = ImageTk.PhotoImage(skin.sidebar(self.side_w, max(h, 1)), master=self.win)
+        self.side.itemconfigure(self.side_bg, image=self._side_img)
+        s = self._s
+        state = "normal" if h >= self.side_need else "hidden"
+        self.side.coords(self.side_ver, s(24), h - s(34))
+        self.side.coords(self.side_link, s(24), h - s(16))
+        self.side.itemconfigure(self.side_ver, state=state)
+        self.side.itemconfigure(self.side_link, state=state)
+
+    def _side_at(self, e):
+        if not (self._s(12) <= e.x <= self.side_w - self._s(12)):
+            return None
+        for i, item in enumerate(self.nav):
+            if item["y0"] <= e.y < item["y1"]:
+                return i
+        return None
+
+    def _on_link(self, e):
+        if self.side.itemcget(self.side_link, "state") == "hidden":
+            return False
+        x0, y0, x1, y1 = self.side.bbox(self.side_link)
+        return x0 <= e.x <= x1 and y0 <= e.y <= y1
+
+    def _side_motion(self, e):
+        i = self._side_at(e)
+        self._side_hover(i)
+        self.side.configure(cursor="hand2" if i is not None or self._on_link(e) else "")
+
+    def _side_hover(self, i):
+        if i == self.side_hot:
+            return
+        if self.side_hot is not None:
+            self.side.itemconfigure(self.nav[self.side_hot]["hot"], state="hidden")
+        self.side_hot = i
+        if i is not None and i != self.side_sel:
+            self.side.itemconfigure(self.nav[i]["hot"], state="normal")
+            self.side.tag_raise(self.nav[i]["icon"])
+            self.side.tag_raise(self.nav[i]["text"])
+
+    def _side_click(self, e):
+        i = self._side_at(e)
+        if i is not None:
+            self.show(i)
+        elif self._on_link(e):
+            import webbrowser
+            webbrowser.open(REPO_URL)
+
+    def _side_select(self, idx):
+        cv = self.side
+        for i, item in enumerate(self.nav):
+            on = i == idx
+            cv.itemconfigure(item["sel"], state="normal" if on else "hidden")
+            if on:
+                cv.itemconfigure(item["hot"], state="hidden")
+            cv.itemconfigure(item["icon"], image=item["icons"][1 if on else 0])
+            cv.itemconfigure(item["shade"], state="normal" if on else "hidden")
+            cv.itemconfigure(item["text"], fill="#ffffff" if on else INK,
+                             font=("Segoe UI Semibold", 10) if on else ("Segoe UI", 10))
+        self.side_sel = idx
+
+    def _make_page(self, name, builders):
+        s = self._s
+        outer = ttk.Frame(self.content)
+        outer.grid(row=0, column=0, sticky="nsew")
+        outer.grid_remove()
+        page = {"outer": outer, "canvas": None}
+        pad = (s(28), s(22), s(28), s(14))
+        if name == "History":   # the list fills the page and scrolls by itself
+            inner = ttk.Frame(outer, padding=pad)
+            inner.pack(fill="both", expand=True)
+        else:
+            cv = tk.Canvas(outer, bg=PAGE, highlightthickness=0, bd=0, yscrollincrement=s(20))
+            cv.pack(fill="both", expand=True)
+            sb = ttk.Scrollbar(outer, orient="vertical", command=cv.yview, style="Page.Vertical.TScrollbar")
+            cv.configure(yscrollcommand=sb.set)
+            inner = ttk.Frame(cv, padding=pad)
+            wid = cv.create_window(0, 0, window=inner, anchor="nw")
+
+            def fit(_e=None, cv=cv, inner=inner, sb=sb, wid=wid):
+                cw, ch = cv.winfo_width(), cv.winfo_height()
+                if cw > 1 and int(float(cv.itemcget(wid, "width") or 0)) != cw:
+                    cv.itemconfigure(wid, width=cw)
+                need = inner.winfo_reqheight()
+                cv.configure(scrollregion=(0, 0, cw, max(need, ch)))
+                if need > ch + 1:   # the scrollbar floats over the margin, so showing it never re-wraps the page
+                    sb.place(relx=1.0, x=-s(3), rely=0, y=s(4), relheight=1.0, height=-s(8), anchor="ne")
+                else:
+                    sb.place_forget()
+                    cv.yview_moveto(0)
+            cv.bind("<Configure>", fit)
+            inner.bind("<Configure>", fit)
+            page["canvas"] = cv
+        title, sub = HEADINGS[name]
+        ttk.Label(inner, text=title, style="H1.TLabel").pack(anchor="w")
+        ttk.Label(inner, text=sub, style="Sub.TLabel", wraplength=s(700)).pack(anchor="w", pady=(s(2), s(16)))
+        for b in builders:
+            f = ttk.Frame(inner)
+            f.pack(fill="both", expand=(name == "History"), pady=(0, s(4)))
+            getattr(self, b)(f)
+        return page
+
+    def _restyle(self, w, in_card=False):
+        for c in w.winfo_children():
+            cls = c.winfo_class()
+            if cls == "TFrame" and str(c.cget("style")) in CONTAINERS:
+                self._restyle(c, True)
+                continue
+            if in_card and cls in _IN_CARD:
+                _card_restyle(self.style, c)
+            self._restyle(c, in_card)
+
+    def show(self, tab):
+        """Open a page by number or by name (old tab names still work)."""
+        names = self.page_names
+        if isinstance(tab, str):
+            tab = ALIASES.get(tab, tab)
+            idx = names.index(tab) if tab in names else 0
+        else:
+            idx = tab if isinstance(tab, int) and 0 <= tab < len(names) else 0
+        name = names[idx]
+        if name != self.current:
+            if self.current:
+                self.pages[self.current]["outer"].grid_remove()
+            self.pages[name]["outer"].grid()
+            self.current = name
+        self._side_select(idx)
+
+    def _step(self, d):
+        self.show((self.page_names.index(self.current) + d) % len(self.page_names))
+        return "break"
+
+    def _wheel(self, e):
+        page = self.pages.get(self.current) or {}
+        cv = page.get("canvas")
+        if cv is None:
+            return
+        try:
+            if e.widget.winfo_class() in ("Text", "Listbox", "Treeview"):
+                return   # those scroll themselves
+        except (AttributeError, tk.TclError):
+            pass
+        top, bottom = cv.yview()
+        if top <= 0 and bottom >= 1:
+            return
+        if e.num in (4, 5):
+            step = -3 if e.num == 4 else 3
+        else:
+            self._wheel_acc += e.delta     # 120 per notch; touchpads send smaller steps
+            step = int(-self._wheel_acc / 40)
+            if not step:
+                return
+            self._wheel_acc += step * 40
+        cv.yview_scroll(step, "units")
 
     # ------------------------------------------------------------------ helpers
     def _var(self, key, kind=tk.StringVar):
@@ -143,202 +583,276 @@ class SettingsWindow:
         self.v[key] = var
         return var
 
-    def _row(self, parent, r, label, widget, hint=""):
-        ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w", pady=4, padx=(0, 10))
-        widget.grid(row=r, column=1, sticky="w", pady=4)
-        if hint:
-            ttk.Label(parent, text=hint, foreground="#777").grid(row=r, column=2, sticky="w", padx=8)
+    def _card(self, parent, title=None, sub=None, style="Panel.TFrame"):
+        """A white card (optionally with a heading); returns the frame to put its contents in."""
+        s = self._s
+        card = ttk.Frame(parent, style=style, padding=(s(16), s(12), s(16), s(14)))
+        card.pack(fill="x", pady=(0, s(12)))
+        if title:
+            ttk.Label(card, text=title, style="CardHead.TLabel").pack(anchor="w", pady=(0, s(4)))
+        if sub:
+            ttk.Label(card, text=sub, style="Muted.TLabel", wraplength=self.wrap).pack(anchor="w", pady=(0, s(6)))
+        body = ttk.Frame(card)
+        body.pack(fill="x")
+        body.card = card
+        return body
 
-    # ------------------------------------------------------------------ tabs
+    def _row(self, parent, r, label, widget, hint=""):
+        s = self._s
+        ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w", pady=s(4), padx=(0, s(12)))
+        widget.grid(row=r, column=1, sticky="w", pady=s(4))
+        if hint:
+            ttk.Label(parent, text=hint, style="Muted.TLabel").grid(row=r, column=2, sticky="w", padx=s(10))
+
+    def _toggles(self, parent, pairs):
+        for key, label in pairs:
+            ttk.Checkbutton(parent, text=label, variable=self._var(key, tk.BooleanVar)).pack(anchor="w",
+                                                                                           pady=self._s(1))
+
+    def _boxed(self, widget):
+        """Plain Tk lists and text boxes, dressed to match: white, a thin sky border, focus glow colour."""
+        widget.configure(bg="white", fg=INK, relief="flat", bd=0, highlightthickness=1,
+                         highlightbackground="#cfe6f6", highlightcolor="#2fa3e6", selectbackground="#bfe6ff",
+                         selectforeground=INK, font=("Segoe UI", 10))
+        if isinstance(widget, tk.Text):
+            widget.configure(insertbackground=INK, padx=self._s(8), pady=self._s(5))
+        else:
+            widget.configure(activestyle="none")
+        return widget
+
+    def _keys(self, parent, prefix, combo, suffix=""):
+        s = self._s
+        if prefix:
+            ttk.Label(parent, text=prefix).pack(side="left", padx=(0, s(6)))
+        for j, k in enumerate(p for p in combo.split("+") if p.strip()):
+            if j:
+                ttk.Label(parent, text="+", style="Muted.TLabel").pack(side="left", padx=s(4))
+            ttk.Label(parent, text=_key_name(k), style="Key.TLabel").pack(side="left")
+        if suffix:
+            ttk.Label(parent, text=suffix).pack(side="left", padx=(s(6), 0))
+
+    # ------------------------------------------------------------------ pages
     def _home(self, f):
-        s = history.stats()
-        ttk.Label(f, text="Hold the shortcut, talk, let go.", style="Muted.TLabel").pack(anchor="w", pady=(0, 10))
+        s = self._s
+        st = history.stats()
         tiles = ttk.Frame(f)
-        tiles.pack(fill="x", pady=4)
-        for i, (val, lab) in enumerate(((f"{s['words']:,}", "words dictated"), (f"{s['wpm']:.0f}", "words / minute"),
-                                        (f"{s['minutes_saved']:.0f} min", "saved vs typing"),
-                                        (f"{s['week_words']:,}", "words this week"))):
-            t = ttk.Frame(tiles, padding=10, style="Tile.TFrame")
-            t.grid(row=0, column=i, padx=4, sticky="nsew")
-            tiles.columnconfigure(i, weight=1)
-            ttk.Label(t, text=val, font=("Segoe UI Semibold", 17), foreground=ACCENT, style="Tile.TLabel").pack(anchor="w")
-            ttk.Label(t, text=lab, foreground=MUTED, style="Tile.TLabel").pack(anchor="w")
+        tiles.pack(fill="x", pady=(0, s(12)))
+        for i, (val, lab) in enumerate(((f"{st['words']:,}", "words dictated"), (f"{st['wpm']:.0f}", "words / minute"),
+                                        (f"{st['minutes_saved']:.0f} min", "saved vs typing"),
+                                        (f"{st['week_words']:,}", "words this week"))):
+            t = ttk.Frame(tiles, padding=(s(16), s(10), s(16), s(12)), style="Tile.TFrame")
+            t.grid(row=0, column=i, padx=(0 if i == 0 else s(10), 0), sticky="nsew")
+            tiles.columnconfigure(i, weight=1, uniform="tile")
+            ttk.Label(t, text=val, style="Stat.TLabel").pack(anchor="w")
+            ttk.Label(t, text=lab, style="Muted.TLabel").pack(anchor="w")
         c = self.cfg
-        ptt = c["hotkey_ptt"].upper().replace("+", " + ")
-        rows = [
-            (f"Hold {ptt}", "Push-to-talk: speak while holding, release to insert text"),
-            (f"{ptt} + {c['hotkey_handsfree_key'].upper()}", "Hands-free: keeps listening; press the shortcut again to finish"),
-            (f"{ptt} + {c['hotkey_command_key'].upper()}", "Command Mode: select text, then say what to do with it"),
-            (f"Tap {ptt} twice", "Hands-free, without reaching for the extra key"),
-            (c["hotkey_paste_last"].upper().replace("+", " + "), "Paste your last transcript again"),
-            (c.get("hotkey_undo_last", "alt+shift+x").upper().replace("+", " + "), "Undo: remove the text of your last dictation"),
-            ('Say "press enter"', 'At the end of a dictation: types it, then presses Enter (also "send it")'),
-            (c["hotkey_cancel"].upper(), "Cancel the current recording"),
-        ]
-        box = ttk.LabelFrame(f, text="Shortcuts", padding=10)
-        box.pack(fill="x", pady=12)
-        for i, (k, d) in enumerate(rows):
-            ttk.Label(box, text=k, font=("Consolas", 10, "bold")).grid(row=i, column=0, sticky="w", pady=2)
-            ttk.Label(box, text=d).grid(row=i, column=1, sticky="w", padx=14)
+        run = self._card(f, "Running now")
+        pills = ttk.Frame(run)
+        pills.pack(anchor="w")
         eng = stt.resolve_engine(c)
-        prov = llm.resolve_provider(c) or "off (offline cleanup only)"
-        info = ttk.LabelFrame(f, text="Engines", padding=10)
-        info.pack(fill="x")
-        ttk.Label(info, text=f"Speech to text: {eng}" + (f"  -  local model {stt.LOCAL.status}" if eng == "local" else "")).pack(anchor="w")
-        ttk.Label(info, text=f"AI formatting: {prov}").pack(anchor="w")
-        if eng == "local" and prov.startswith("off"):
-            ttk.Label(info, foreground="#b45309", wraplength=700, text=(
+        prov = llm.resolve_provider(c)
+        names = {"groq": "Groq", "openai": "OpenAI", "local": "this PC", "anthropic": "Anthropic",
+                 "custom": "your server"}
+        inst = c.get("instant_text_engine", "off")
+        tags = [(f"Speech: {names.get(eng, eng)}", "blue"),
+                (f"AI clean-up: {names.get(prov, prov)}" if prov else "AI clean-up: offline only",
+                 "blue" if prov else "amber"),
+                ("Instant text: " + {"off": "off", "preview": "quick preview", "gpu": "graphics card",
+                                     "deepgram": "Deepgram"}.get(inst, inst), "blue" if inst == "off" else "green"),
+                (f"Private mode: {'on' if c.get('private_mode') else 'off'}", "violet")]
+        for txt, col in tags:
+            ttk.Label(pills, text=txt, style=f"{col.title()}Pill.TLabel").pack(side="left", padx=(0, s(8)))
+        if eng == "local":
+            ttk.Label(run, text=f"Offline speech model: {stt.LOCAL.status}", style="Muted.TLabel").pack(
+                anchor="w", pady=(s(8), 0))
+        if eng == "local" and not prov:
+            ttk.Label(run, style="Warn.TLabel", wraplength=self.wrap, text=(
                 "Tip: paste a free Groq API key in Speech & AI for Wispr-level speed and AI formatting. "
-                "Without it, everything runs offline on this PC.")).pack(anchor="w", pady=(6, 0))
+                "Without it, everything runs offline on this PC.")).pack(anchor="w", pady=(s(6), 0))
+        ptt = c["hotkey_ptt"]
+        rows = [("Hold", ptt, "", "Push-to-talk: speak while holding, release to insert text"),
+                ("", f"{ptt}+{c['hotkey_handsfree_key']}", "", "Hands-free: keeps listening until you press it again"),
+                ("", f"{ptt}+{c['hotkey_command_key']}", "", "Command Mode: edit or ask by voice"),
+                ("Tap", ptt, "twice", "Hands-free, without reaching for the extra key"),
+                ("", c["hotkey_paste_last"], "", "Paste your last transcript again"),
+                ("", c.get("hotkey_undo_last", "alt+shift+x"), "", "Undo: remove the text of your last dictation"),
+                ('Say "press enter"', "", "", 'At the end of a dictation: types it, then presses Enter'),
+                ("", c["hotkey_cancel"], "", "Cancel the current recording")]
+        box = self._card(f, "Shortcuts")
+        for i, (pre, combo, suf, desc) in enumerate(rows):
+            kf = ttk.Frame(box)
+            kf.grid(row=i, column=0, sticky="w", pady=s(3))
+            self._keys(kf, pre, combo, suf)
+            ttk.Label(box, text=desc, style="Muted.TLabel").grid(row=i, column=1, sticky="w", padx=(s(18), 0))
 
     def _general(self, f):
-        r = 0
-        for key, label, hint in (("hotkey_ptt", "Push-to-talk (hold)", "e.g. ctrl+win, f9, right alt, rctrl"),
-                                 ("hotkey_handsfree_key", "+ key for hands-free", "pressed while holding push-to-talk"),
-                                 ("hotkey_command_key", "+ key for Command Mode", "pressed while holding push-to-talk"),
-                                 ("hotkey_paste_last", "Paste last transcript", ""),
-                                 ("hotkey_undo_last", "Undo last dictation", "removes what Aqua Lite just typed"),
-                                 ("hotkey_cancel", "Cancel recording", "")):
-            self._row(f, r, label, ttk.Entry(f, textvariable=self._var(key), width=24), hint)
-            r += 1
-        ttk.Separator(f).grid(row=r, column=0, columnspan=3, sticky="ew", pady=10)
-        r += 1
-        self._row(f, r, "Hands-free stops after", ttk.Spinbox(f, from_=0, to=60, width=6,
-                                                              textvariable=self._var("handsfree_silence_secs")),
-                  "seconds of silence (0 = never)")
-        r += 1
+        keys = self._card(f, "Shortcuts")
+        for r, (key, label, hint) in enumerate((
+                ("hotkey_ptt", "Push-to-talk (hold)", "e.g. ctrl+win, f9, right alt, rctrl"),
+                ("hotkey_handsfree_key", "+ key for hands-free", "pressed while holding push-to-talk"),
+                ("hotkey_command_key", "+ key for Command Mode", "pressed while holding push-to-talk"),
+                ("hotkey_paste_last", "Paste last transcript", ""),
+                ("hotkey_undo_last", "Undo last dictation", "removes what Aqua Lite just typed"),
+                ("hotkey_cancel", "Cancel recording", ""))):
+            self._row(keys, r, label, ttk.Entry(keys, textvariable=self._var(key), width=24), hint)
+        mic_card = self._card(f, "Microphone & language")
         devices = ["(Windows default)"] + _safe_devices()
         mic = tk.StringVar(value=self.cfg.get("mic_device") or "(Windows default)")
         self.v["mic_device"] = mic
-        self._row(f, r, "Microphone", ttk.Combobox(f, textvariable=mic, values=devices, state="readonly", width=40))
-        r += 1
-        self.lang = _pair_combo(f, LANGS, self.cfg.get("language", "auto"), width=22)
-        self._row(f, r, "Language", self.lang, "Auto handles Arabic, English and mixing")
-        r += 1
-        for key, label in (("live_preview", "Show my words in the bar while I talk (when instant text is off)"),
-                           ("learn_corrections", "Learn words I correct right after dictating"),
-                           ("voice_enter", 'Say "press enter" or "send it" at the end to press Enter'),
-                           ("double_tap_handsfree", "Tap the shortcut twice for hands-free"),
-                           ("sounds", "Play start/stop sounds"), ("show_idle_bar", "Keep the Flow bar on screen when idle (click it to start hands-free)"),
-                           ("whisper_boost", "Whisper mode (boost quiet speech)"),
-                           ("add_trailing_space", "Add a space after each dictation"),
-                           ("restore_clipboard", "Restore my clipboard after pasting"),
-                           ("shift_insert_in_editors", "Use Shift+Insert in VS Code / Cursor / Windsurf"),
-                           ("launch_at_startup", "Start Aqua Lite when Windows starts"),
-                           ("auto_update", "Update automatically when Aqua Lite starts")):
-            ttk.Checkbutton(f, text=label, variable=self._var(key, tk.BooleanVar)).grid(
-                row=r, column=0, columnspan=3, sticky="w", pady=1)
-            r += 1
+        mic_list = ttk.Combobox(mic_card, textvariable=mic, values=devices, state="readonly", width=44)
+        self._row(mic_card, 0, "Microphone", mic_list)
+        mic_list.grid_configure(columnspan=2)
+        self.lang = _pair_combo(mic_card, LANGS, self.cfg.get("language", "auto"), width=22)
+        self._row(mic_card, 1, "Language", self.lang, "Auto handles Arabic, English and mixing")
+        self._row(mic_card, 2, "Hands-free stops after",
+                  ttk.Spinbox(mic_card, from_=0, to=60, width=6, textvariable=self._var("handsfree_silence_secs")),
+                  "seconds of silence (0 = never)")
+        talk = self._card(f, "While you talk")
+        self._toggles(talk, (
+            ("live_preview", "Show my words in the bar while I talk (when instant text is off)"),
+            ("learn_corrections", "Learn words I correct right after dictating"),
+            ("voice_enter", 'Say "press enter" or "send it" at the end to press Enter'),
+            ("double_tap_handsfree", "Tap the shortcut twice for hands-free"),
+            ("sounds", "Play start/stop sounds"),
+            ("show_idle_bar", "Keep the Flow bar on screen when idle (click it to start hands-free)"),
+            ("frosted_glass", "Frosted glass Flow bar: see-through, with what's behind it softly blurred"),
+            ("whisper_boost", "Whisper mode (boost quiet speech)")))
+        typing = self._card(f, "Typing & Windows")
+        self._toggles(typing, (
+            ("add_trailing_space", "Add a space after each dictation"),
+            ("restore_clipboard", "Restore my clipboard after pasting"),
+            ("shift_insert_in_editors", "Use Shift+Insert in VS Code / Cursor / Windsurf"),
+            ("launch_at_startup", "Start Aqua Lite when Windows starts"),
+            ("auto_update", "Update automatically when Aqua Lite starts")))
 
     def _ai(self, f):
-        top = ttk.LabelFrame(f, text="Speech to text", padding=10)
-        top.pack(fill="x")
+        s = self._s
+        top = self._card(f, "Speech to text")
         eng = self._var("stt_engine")
-        for i, (val, lab) in enumerate((("auto", "Auto"), ("groq", "Groq (fast, cloud)"),
-                                        ("openai", "OpenAI (cloud)"), ("local", "On this PC (offline)"))):
-            ttk.Radiobutton(top, text=lab, value=val, variable=eng).grid(row=0, column=i, sticky="w", padx=(0, 14))
-        ttk.Label(top, text="Local model").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        radios = ttk.Frame(top)
+        radios.grid(row=0, column=0, columnspan=4, sticky="w")
+        for val, lab in (("auto", "Auto"), ("groq", "Groq (fast, cloud)"), ("openai", "OpenAI (cloud)"),
+                         ("local", "On this PC (offline)")):
+            ttk.Radiobutton(radios, text=lab, value=val, variable=eng).pack(side="left", padx=(0, s(18)))
+        ttk.Label(top, text="Offline model").grid(row=1, column=0, sticky="w", pady=(s(10), 0))
         ttk.Combobox(top, textvariable=self._var("local_model"), state="readonly", width=16,
-                     values=["tiny", "base", "small", "medium", "large-v3-turbo"]).grid(row=1, column=1, sticky="w", pady=(8, 0))
+                     values=["tiny", "base", "small", "medium", "large-v3-turbo"]).grid(
+            row=1, column=1, sticky="w", pady=(s(10), 0), padx=(s(10), 0))
         ttk.Combobox(top, textvariable=self._var("local_device"), state="readonly", width=8,
-                     values=["auto", "cpu", "cuda"]).grid(row=1, column=2, sticky="w", pady=(8, 0))
+                     values=["auto", "cpu", "cuda"]).grid(row=1, column=2, sticky="w", pady=(s(10), 0),
+                                                          padx=(s(8), 0))
         ttk.Label(top, text="small = good balance on CPU; large-v3-turbo needs an NVIDIA GPU",
-                  foreground="#777").grid(row=2, column=0, columnspan=4, sticky="w")
+                  style="Muted.TLabel").grid(row=2, column=0, columnspan=4, sticky="w", pady=(s(4), 0))
 
-        mid = ttk.LabelFrame(f, text="AI formatting & Command Mode", padding=10)
-        mid.pack(fill="x", pady=10)
+        mid = self._card(f, "AI formatting & Command Mode")
         ttk.Label(mid, text="Provider").grid(row=0, column=0, sticky="w")
         ttk.Combobox(mid, textvariable=self._var("ai_provider"), state="readonly", width=14,
-                     values=["auto", "groq", "openai", "anthropic", "custom", "off"]).grid(row=0, column=1, sticky="w")
+                     values=["auto", "groq", "openai", "anthropic", "custom", "off"]).grid(
+            row=0, column=1, sticky="w", padx=(s(10), 0))
         self.strength = _pair_combo(mid, STRENGTHS, self.cfg.get("editing_strength", "medium"), width=30)
-        ttk.Label(mid, text="Editing strength").grid(row=0, column=2, sticky="e", padx=(16, 6))
+        ttk.Label(mid, text="Editing strength").grid(row=0, column=2, sticky="e", padx=(s(20), s(8)))
         self.strength.grid(row=0, column=3, sticky="w")
 
-        keys = ttk.LabelFrame(f, text="API keys & models (stored only on this PC)", padding=10)
-        keys.pack(fill="x")
-        rows = (("Groq key", "groq_api_key", "groq_llm_model", "groq_stt_model", "free key: console.groq.com/keys"),
+        keys = self._card(f, "API keys & models", sub=(
+            "Stored only on this PC. A free Groq key (console.groq.com/keys) powers both speech and formatting."))
+        rows = (("Groq key", "groq_api_key", "groq_llm_model", "groq_stt_model", ""),
                 ("OpenAI key", "openai_api_key", "openai_llm_model", "openai_stt_model", ""),
                 ("Anthropic key", "anthropic_api_key", "anthropic_llm_model", None, ""),
-                ("Custom key", "custom_api_key", "custom_llm_model", None, "LM Studio / Ollama / any OpenAI-compatible"))
-        ttk.Label(keys, text="AI model", foreground="#777").grid(row=0, column=2, sticky="w")
-        ttk.Label(keys, text="Speech model", foreground="#777").grid(row=0, column=3, sticky="w")
+                ("Custom key", "custom_api_key", "custom_llm_model", None, "LM Studio, Ollama"))
+        ttk.Label(keys, text="AI model", style="Muted.TLabel").grid(row=0, column=2, sticky="w", padx=s(4))
+        ttk.Label(keys, text="Speech", style="Muted.TLabel").grid(row=0, column=3, sticky="w", padx=s(4))
         for i, (lab, k, m, sm, hint) in enumerate(rows, start=1):
-            ttk.Label(keys, text=lab).grid(row=i, column=0, sticky="w", pady=2)
-            ttk.Entry(keys, textvariable=self._var(k), show="•", width=30).grid(row=i, column=1, sticky="w", padx=4)
-            ttk.Entry(keys, textvariable=self._var(m), width=20).grid(row=i, column=2, sticky="w", padx=4)
+            ttk.Label(keys, text=lab).grid(row=i, column=0, sticky="w", pady=s(3))
+            ttk.Entry(keys, textvariable=self._var(k), show="•", width=24).grid(row=i, column=1, sticky="w",
+                                                                                   padx=s(4))
+            ttk.Entry(keys, textvariable=self._var(m), width=16).grid(row=i, column=2, sticky="w", padx=s(4))
             if sm:
-                ttk.Entry(keys, textvariable=self._var(sm), width=22).grid(row=i, column=3, sticky="w", padx=4)
+                ttk.Entry(keys, textvariable=self._var(sm), width=16).grid(row=i, column=3, sticky="w", padx=s(4))
             elif hint:
-                ttk.Label(keys, text=hint, foreground="#777").grid(row=i, column=3, sticky="w", padx=4)
-        ttk.Label(keys, text="Custom server URL").grid(row=5, column=0, sticky="w", pady=(6, 0))
-        ttk.Entry(keys, textvariable=self._var("custom_base_url"), width=30).grid(row=5, column=1, sticky="w", padx=4, pady=(6, 0))
-        ttk.Label(keys, text="Get a free Groq key at console.groq.com/keys - it powers both speech and formatting.",
-                  foreground="#777").grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 0))
-        ttk.Button(f, text="Test AI connection", command=self._test_ai).pack(anchor="w", pady=10)
+                ttk.Label(keys, text=hint, style="Muted.TLabel").grid(row=i, column=3, sticky="w", padx=s(4))
+        ttk.Label(keys, text="Custom server URL").grid(row=5, column=0, sticky="w", pady=(s(8), 0))
+        ttk.Entry(keys, textvariable=self._var("custom_base_url"), width=24).grid(row=5, column=1, sticky="w",
+                                                                                 padx=s(4), pady=(s(8), 0))
+        ttk.Button(f, text="Test AI connection", command=self._test_ai).pack(anchor="w", pady=(0, s(6)))
 
     INSTANT_ENGINES = [
         ("off", "Off", "Your text appears when you let go, already polished. Works on every PC."),
-        ("preview", "Quick preview - any PC",
+        ("preview", "Quick preview",
          "A small speech model on your processor types words as you talk. Fast but rough: expect wrong words until "
          "you let go and the polished version replaces them. Uses some processor power while you talk."),
-        ("gpu", "Graphics card - NVIDIA only",
-         "REQUIRES an NVIDIA graphics card. A Whisper model runs on the card, so the live words are almost the "
+        ("gpu", "Graphics card",
+         "Needs an NVIDIA graphics card. A Whisper model runs on the card, so the live words are almost the "
          "final text - pick one below (the recommended one fits your card). One-time download: about 1 GB of NVIDIA "
          "libraries plus the model. The card only works while you talk."),
-        ("deepgram", "Deepgram - any PC, needs internet",
-         "REQUIRES a Deepgram account (console.deepgram.com: free credit when you sign up, then about $0.46 per hour "
+        ("deepgram", "Deepgram",
+         "Needs a Deepgram account (console.deepgram.com: free credit when you sign up, then about $0.46 per hour "
          "of talking). Your voice streams to Deepgram while you talk and accurate words arrive in about 0.3 s. "
          "Letting go is faster too, because the transcript is already done."),
     ]
+    INSTANT_TAGS = {"off": [("Every PC", "green")], "preview": [("Any PC", "green")],
+                    "gpu": [("NVIDIA graphics card only", "amber")],
+                    "deepgram": [("Any PC", "green"), ("Needs internet + a Deepgram key", "amber")]}
 
     def _instant(self, f):
-        ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
-            "Instant text types your words into the app while you're still talking. When you let go, they're replaced "
-            "with the polished version, like always. Pick how the live words are made - only choose an option if you "
-            "have what it needs.")).pack(anchor="w", pady=(0, 8))
+        s = self._s
         var = tk.StringVar(value=self.cfg.get("instant_text_engine", "off"))
         self.v["instant_text_engine"] = var
+        self.pick_cards = {}
+        indent = s(28)   # lines things up under the option's name, past the radio orb
         for key, title, desc in self.INSTANT_ENGINES:
-            box = ttk.Frame(f)
-            box.pack(fill="x", pady=(6, 0))
-            ttk.Radiobutton(box, text=title, value=key, variable=var).pack(anchor="w")
-            ttk.Label(box, text=desc, wraplength=700, style="Muted.TLabel").pack(anchor="w", padx=(24, 0))
+            box = self._card(f, style="Pick.TFrame")
+            head = ttk.Frame(box)
+            head.pack(fill="x")
+            ttk.Radiobutton(head, text=title, value=key, variable=var, style="Title.TRadiobutton").pack(side="left")
+            for txt, col in self.INSTANT_TAGS.get(key, ()):
+                ttk.Label(head, text=txt, style=f"{col.title()}Pill.TLabel").pack(side="left", padx=(s(10), 0))
+            d = ttk.Label(box, text=desc, wraplength=self.wrap - indent, style="Muted.TLabel")
+            d.pack(anchor="w", padx=(indent, 0), pady=(s(2), 0))
+            for w in (box.card, box, head, d):   # click anywhere on the card to pick it
+                w.bind("<Button-1>", lambda _e, k=key: var.set(k), add="+")
+            self.pick_cards[key] = box.card
             if key == "gpu":
                 row = ttk.Frame(box)
-                row.pack(anchor="w", padx=(24, 0), pady=(4, 0))
+                row.pack(fill="x", padx=(indent, 0), pady=(s(8), 0))
                 ttk.Label(row, text="Model").pack(side="left")
                 self.gpu_keys = list(gpu.MODELS)
-                self.gpu_model = ttk.Combobox(row, state="readonly", width=78, values=["Checking your card..."])
+                self.gpu_model = ttk.Combobox(row, state="readonly", width=40, values=["Checking your card..."])
                 self.gpu_model.current(0)
-                self.gpu_model.pack(side="left", padx=8)
+                self.gpu_model.pack(side="left", fill="x", expand=True, padx=(s(10), 0))
                 row2 = ttk.Frame(box)
-                row2.pack(anchor="w", padx=(24, 0), pady=(4, 0))
+                row2.pack(anchor="w", padx=(indent, 0), pady=(s(6), 0))
                 ttk.Label(row2, text="Free the card after").pack(side="left")
                 mins = tk.DoubleVar(value=float(self.cfg.get("gpu_idle_minutes", 5)))
                 self.v["gpu_idle_minutes"] = mins
-                idle_txt = ttk.Label(row2, width=26)
+                idle_txt = ttk.Label(row2, width=26, style="Muted.TLabel")
 
                 def show_idle(_v=None):
                     m = int(round(mins.get()))
                     mins.set(m)
                     idle_txt.configure(text="never (keep it loaded)" if m == 0 else
                                        f"{m} minute{'s' if m != 1 else ''} without talking")
-                ttk.Scale(row2, from_=0, to=60, orient="horizontal", length=240, variable=mins,
-                          command=show_idle).pack(side="left", padx=8)
+                ttk.Scale(row2, from_=0, to=60, orient="horizontal", length=s(240), variable=mins,
+                          command=show_idle).pack(side="left", padx=s(10))
                 idle_txt.pack(side="left")
                 show_idle()
                 row3 = ttk.Frame(box)
-                row3.pack(anchor="w", padx=(24, 0), pady=(4, 0))
+                row3.pack(anchor="w", padx=(indent, 0), pady=(s(8), 0))
                 self.gpu_btn = ttk.Button(row3, text="Set up graphics card", command=self._gpu_setup)
                 self.gpu_btn.pack(side="left")
                 self.gpu_status = ttk.Label(row3, text="Checking for an NVIDIA card...", style="Muted.TLabel")
-                self.gpu_status.pack(side="left", padx=10)
+                self.gpu_status.pack(side="left", padx=s(10))
             if key == "deepgram":
                 row = ttk.Frame(box)
-                row.pack(anchor="w", padx=(24, 0), pady=(4, 0))
+                row.pack(anchor="w", padx=(indent, 0), pady=(s(8), 0))
                 ttk.Label(row, text="Deepgram API key").pack(side="left")
-                ttk.Entry(row, textvariable=self._var("deepgram_api_key"), width=46, show="\u2022").pack(
-                    side="left", padx=8)
+                ttk.Entry(row, textvariable=self._var("deepgram_api_key"), width=46, show="•").pack(
+                    side="left", padx=s(10))
+
+        def mark(*_a):
+            for k, card in self.pick_cards.items():
+                card.configure(style="PickOn.TFrame" if var.get() == k else "Pick.TFrame")
+        var.trace_add("write", mark)
+        mark()
         self.gpu_job = None
         threading.Thread(target=self._gpu_check, daemon=True).start()
 
@@ -418,54 +932,55 @@ class SettingsWindow:
         threading.Thread(target=run, daemon=True, name="gpu-setup").start()
 
     def _private(self, f):
-        ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
-            "Private mode keeps everything on this PC. Your voice is turned into text by the offline speech model, "
-            "and the AI clean-up, Command Mode and edit-by-voice run on an AI model built into Aqua Lite. No account, "
-            "no API key, nothing sent out, and it works without internet once it's downloaded.")).pack(anchor="w")
-        row = ttk.Frame(f)
-        row.pack(fill="x", pady=(14, 4))
-        ttk.Label(row, text="AI model").pack(side="left", padx=(0, 8))
+        s = self._s
+        dl = self._card(f, "The built-in AI", sub=(
+            "AI clean-up, Command Mode and edit-by-voice run on an AI model built into Aqua Lite, and your voice is "
+            "turned into text by the offline speech model. Download it once; after that it works without internet."))
+        row = ttk.Frame(dl)
+        row.pack(fill="x")
+        ttk.Label(row, text="AI model").pack(side="left", padx=(0, s(10)))
         self.ai_keys = list(localai.MODELS)
-        self.ai_model = ttk.Combobox(row, state="readonly", width=62,
+        self.ai_model = ttk.Combobox(row, state="readonly", width=60,
                                      values=[localai.MODELS[k]["label"] for k in self.ai_keys])
         cur = self.cfg.get("local_ai_model", localai.DEFAULT_MODEL)
         self.ai_model.current(self.ai_keys.index(cur) if cur in self.ai_keys else 0)
         self.ai_model.pack(side="left")
         self.ai_model.bind("<<ComboboxSelected>>", lambda _e: self._ai_refresh())
-        btns = ttk.Frame(f)
-        btns.pack(anchor="w", pady=(8, 4))
+        self.ai_bar = ttk.Progressbar(dl, length=s(560), mode="determinate", maximum=1000)
+        self.ai_bar.pack(anchor="w", pady=(s(14), s(4)))
+        self.ai_status = ttk.Label(dl, text="", style="Muted.TLabel")
+        self.ai_status.pack(anchor="w")
+        btns = ttk.Frame(dl)
+        btns.pack(anchor="w", pady=(s(10), 0))
         self.ai_dl = ttk.Button(btns, text="Download", command=self._ai_download)
         self.ai_dl.pack(side="left")
         self.ai_cancel_btn = ttk.Button(btns, text="Cancel", command=self._ai_cancel, state="disabled")
-        self.ai_cancel_btn.pack(side="left", padx=6)
-        self.ai_bar = ttk.Progressbar(f, length=560, mode="determinate", maximum=1000)
-        self.ai_bar.pack(anchor="w", pady=(4, 2))
-        self.ai_status = ttk.Label(f, text="", style="Muted.TLabel")
-        self.ai_status.pack(anchor="w")
-        ttk.Checkbutton(f, text="Private mode: keep my voice and text on this PC",
-                        variable=self._var("private_mode", tk.BooleanVar),
-                        command=self._private_toggled).pack(anchor="w", pady=(14, 2))
-        row = ttk.Frame(f)
-        row.pack(anchor="w", padx=(22, 0), pady=(4, 2))
+        self.ai_cancel_btn.pack(side="left", padx=s(8))
+        ttk.Button(btns, text="Delete the downloaded AI", command=self._ai_delete).pack(side="left")
+
+        pm = self._card(f, "Private mode")
+        ttk.Checkbutton(pm, text="Keep my voice and text on this PC", variable=self._var("private_mode", tk.BooleanVar),
+                        command=self._private_toggled).pack(anchor="w")
+        row = ttk.Frame(pm)
+        row.pack(anchor="w", pady=(s(10), s(2)))
         ttk.Label(row, text="Free its memory after").pack(side="left")
         pmins = tk.DoubleVar(value=float(self.cfg.get("private_idle_minutes", 10)))
         self.v["private_idle_minutes"] = pmins
-        ptxt = ttk.Label(row, width=30)
+        ptxt = ttk.Label(row, width=30, style="Muted.TLabel")
 
         def show_pidle(_v=None):
             m = int(round(pmins.get()))
             pmins.set(m)
             ptxt.configure(text="never (keep it loaded)" if m == 0 else
                            f"{m} minute{'s' if m != 1 else ''} unused (restarts as you talk)")
-        ttk.Scale(row, from_=0, to=60, orient="horizontal", length=240, variable=pmins,
-                  command=show_pidle).pack(side="left", padx=8)
+        ttk.Scale(row, from_=0, to=60, orient="horizontal", length=s(240), variable=pmins,
+                  command=show_pidle).pack(side="left", padx=s(10))
         ptxt.pack(side="left")
         show_pidle()
-        ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
+        ttk.Label(pm, wraplength=self.wrap, style="Muted.TLabel", text=(
             "Speech uses the offline model picked under Speech & AI (\"small\" is a good balance). With a graphics "
             "card the AI answers in about a second; on the processor alone it can take several seconds, so pick the "
-            "Small model there.")).pack(anchor="w", padx=(22, 0))
-        ttk.Button(f, text="Delete the downloaded AI", command=self._ai_delete).pack(anchor="w", pady=(16, 0))
+            "Small model there.")).pack(anchor="w", pady=(s(8), 0))
         self.ai_job = None
         self._ai_refresh()
 
@@ -543,64 +1058,70 @@ class SettingsWindow:
             self._ai_refresh()
 
     def _style(self, f):
-        ttk.Label(f, text="Aqua Lite formats differently depending on where you're typing.",
-                  foreground="#555").pack(anchor="w", pady=(0, 10))
+        s = self._s
+        card = self._card(f, "How each kind of app should sound",
+                          sub="Aqua Lite formats differently depending on where you're typing.")
         self.style_boxes = {}
-        for key, title, apps in CATS:
-            box = ttk.LabelFrame(f, text=f"{title}   ({apps})", padding=8)
-            box.pack(fill="x", pady=4)
-            cb = _pair_combo(box, STYLE_NAMES, self.cfg["styles"].get(key, "formal"), width=14)
-            cb.pack(side="left")
-            ex = ttk.Label(box, text="", foreground="#555")
-            ex.pack(side="left", padx=14)
-            upd = lambda _e=None, cb=cb, ex=ex: ex.configure(text=f"“{STYLE_EXAMPLE[cb.get_key()]}”")
+        for i, (key, title, apps) in enumerate(CATS):
+            cell = ttk.Frame(card)
+            cell.grid(row=i, column=0, sticky="w", pady=s(5))
+            ttk.Label(cell, text=title, style="Strong.TLabel").pack(anchor="w")
+            ttk.Label(cell, text=apps, style="Muted.TLabel").pack(anchor="w")
+            cb = _pair_combo(card, STYLE_NAMES, self.cfg["styles"].get(key, "formal"), width=14)
+            cb.grid(row=i, column=1, sticky="w", padx=s(18))
+            ex = ttk.Label(card, text="", style="Muted.TLabel")
+            ex.grid(row=i, column=2, sticky="w")
+            upd = lambda _e=None, cb=cb, ex=ex: ex.configure(text=f"“{STYLE_EXAMPLE[cb.get_key()]}”")  # noqa
             cb.bind("<<ComboboxSelected>>", upd)
             upd()
             self.style_boxes[key] = cb
-        ttk.Checkbutton(f, text="Code mode: in code editors and terminals, keep file names, variables and commands exact",
-                        variable=self._var("code_mode", tk.BooleanVar)).pack(anchor="w", pady=10)
+        ttk.Checkbutton(card, text="Code mode: in code editors and terminals, keep file names, variables and "
+                                   "commands exact", variable=self._var("code_mode", tk.BooleanVar)).grid(
+            row=len(CATS), column=0, columnspan=3, sticky="w", pady=(s(10), 0))
 
-        smart = ttk.LabelFrame(f, text="Get to know me", padding=10)
-        smart.pack(fill="x", pady=(4, 0))
+        smart = self._card(f, "Get to know me")
+        indent = s(46)   # under a toggle's text
         ttk.Checkbutton(smart, text="Learn from how I edit Aqua Lite's text (wording, punctuation, emoji, formatting)",
-                        variable=self._var("learn_style", tk.BooleanVar)).grid(row=0, column=0, columnspan=3, sticky="w")
+                        variable=self._var("learn_style", tk.BooleanVar)).grid(row=0, column=0, columnspan=3,
+                                                                                sticky="w")
         self.learned_label = ttk.Label(smart, text="", style="Muted.TLabel")
-        self.learned_label.grid(row=1, column=0, sticky="w", padx=(22, 0))
+        self.learned_label.grid(row=1, column=0, sticky="w", padx=(indent, 0))
         ttk.Button(smart, text="Forget what it learned", command=self._forget_edits).grid(row=1, column=1, sticky="w",
-                                                                                         padx=10)
+                                                                                         padx=s(10), pady=s(4))
         ttk.Checkbutton(smart, text="Read the conversation on screen so names, topic and tone fit what I'm replying to",
                         variable=self._var("screen_context", tk.BooleanVar)).grid(row=2, column=0, columnspan=3,
-                                                                                    sticky="w", pady=(10, 0))
-        ttk.Label(smart, style="Muted.TLabel", wraplength=700, text=(
+                                                                                    sticky="w", pady=(s(10), 0))
+        ttk.Label(smart, style="Muted.TLabel", wraplength=self.wrap - indent, text=(
             "Reads only what's visible in the app you're dictating into, and sends it to your AI provider with the "
             "dictation. Never saved. Password boxes and private/incognito windows are never read.")).grid(
-            row=3, column=0, columnspan=3, sticky="w", padx=(22, 0))
-        ttk.Label(smart, text="Never read these apps").grid(row=4, column=0, sticky="w", padx=(22, 0), pady=(6, 0))
+            row=3, column=0, columnspan=3, sticky="w", padx=(indent, 0))
+        row = ttk.Frame(smart)
+        row.grid(row=4, column=0, columnspan=3, sticky="w", padx=(indent, 0), pady=(s(8), 0))
+        ttk.Label(row, text="Never read these apps").pack(side="left")
         self.blocked = tk.StringVar(value=", ".join(self.cfg.get("context_blocked_apps") or []))
-        ttk.Entry(smart, textvariable=self.blocked, width=60).grid(row=4, column=1, columnspan=2, sticky="w",
-                                                                   pady=(6, 0))
+        ttk.Entry(row, textvariable=self.blocked, width=50).pack(side="left", padx=s(10))
         self._count_edits()
 
     def _memory(self, f):
-        ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
+        s = self._s
+        card = self._card(f, "What it learned from your edits", sub=(
             "How you write, as Aqua Lite has learned it from your edits. It's used every time it formats a "
             "dictation, and rebuilt by your AI every few new edits. Change anything you like here - add or remove "
-            "lines - and click Save. Only style is kept here, never what your messages were about.")).pack(anchor="w")
+            "lines - and click Save. Only style is kept here, never what your messages were about."))
         prof = memory.load()
         self.mem_text = {}
         for key, label in memory.KINDS:
-            box = ttk.LabelFrame(f, text=label, padding=(8, 4))
-            box.pack(fill="x", pady=3)
-            t = tk.Text(box, height=3, wrap="word", relief="flat", font=("Segoe UI", 10))
+            ttk.Label(card, text=label, style="Eyebrow.TLabel").pack(anchor="w", pady=(s(8), s(3)))
+            t = self._boxed(tk.Text(card, height=3, wrap="word"))
             t.insert("1.0", prof["styles"].get(key, ""))
             t.pack(fill="x")
             self.mem_text[key] = t
-        self.mem_status = ttk.Label(f, text="", style="Muted.TLabel")
-        self.mem_status.pack(anchor="w", pady=(4, 2))
-        row = ttk.Frame(f)
-        row.pack(anchor="w", pady=4)
+        self.mem_status = ttk.Label(card, text="", style="Muted.TLabel")
+        self.mem_status.pack(anchor="w", pady=(s(10), s(4)))
+        row = ttk.Frame(card)
+        row.pack(anchor="w", pady=(s(2), 0))
         ttk.Button(row, text="Update from my edits now", command=self._mem_update).pack(side="left")
-        ttk.Button(row, text="Export my memory...", command=self._mem_export).pack(side="left", padx=6)
+        ttk.Button(row, text="Export my memory...", command=self._mem_export).pack(side="left", padx=s(8))
         ttk.Button(row, text="Import...", command=self._mem_import).pack(side="left")
         self._mem_refresh_status(prof)
 
@@ -675,7 +1196,7 @@ class SettingsWindow:
             return
         self.app.apply_settings(cfg)
         messagebox.showinfo(APP_NAME, f"Imported {summary}.", parent=self.win)
-        tab = self.nb.index("current")
+        tab = self.current
         self.win.destroy()
         self.app.open_settings(tab)
 
@@ -692,36 +1213,39 @@ class SettingsWindow:
             self._count_edits()
 
     def _music(self, f):
-        ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
+        s = self._s
+        card = self._card(f, "Music while you talk", sub=(
             "While you dictate, Aqua Lite softly plays a random part of a song from your music folder, then fades it "
-            "out when you stop. Add any songs you own: mp3, m4a, flac, ogg or wav.")).pack(anchor="w")
-        ttk.Checkbutton(f, text="Play music while I talk", variable=self._var("music_enabled", tk.BooleanVar)).pack(
-            anchor="w", pady=(10, 4))
-        row = ttk.Frame(f)
-        row.pack(fill="x", pady=4)
+            "out when you stop. Add any songs you own: mp3, m4a, flac, ogg or wav."))
+        ttk.Checkbutton(card, text="Play music while I talk", variable=self._var("music_enabled", tk.BooleanVar)).pack(
+            anchor="w")
+        row = ttk.Frame(card)
+        row.pack(fill="x", pady=(s(10), 0))
         ttk.Label(row, text="Volume").pack(side="left")
         vol = self._var("music_volume", tk.IntVar)
         lab = ttk.Label(row, text=f"{vol.get()}%", width=5)
-        ttk.Scale(row, from_=5, to=100, orient="horizontal", length=320,
+        ttk.Scale(row, from_=5, to=100, orient="horizontal", length=s(300),
                   command=lambda v: (vol.set(int(float(v))), lab.configure(text=f"{int(float(v))}%")),
-                  value=vol.get()).pack(side="left", padx=10)
+                  value=vol.get()).pack(side="left", padx=s(10))
         lab.pack(side="left")
-        ttk.Label(row, text="30% lets you hear yourself and keeps the mic clear", style="Muted.TLabel").pack(side="left", padx=8)
-        box = ttk.LabelFrame(f, text="Music folder", padding=10)
-        box.pack(fill="x", pady=10)
+        ttk.Label(card, text="30% lets you hear yourself and keeps the mic clear", style="Muted.TLabel").pack(
+            anchor="w", pady=(s(4), 0))
+        box = self._card(f, "Music folder")
         folder = self._var("music_folder")
         if not folder.get():
             folder.set(music.default_folder())
         ttk.Entry(box, textvariable=folder, width=70).grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Button(box, text="Open folder", command=lambda: _open_folder(folder.get())).grid(row=1, column=0, sticky="w", pady=8)
-        ttk.Button(box, text="Choose...", command=lambda: self._choose_folder(folder)).grid(row=1, column=1, sticky="w", padx=6)
-        ttk.Button(box, text="Preview", command=self._preview_music).grid(row=1, column=2, sticky="w")
+        btns = ttk.Frame(box)
+        btns.grid(row=1, column=0, columnspan=3, sticky="w", pady=s(10))
+        ttk.Button(btns, text="Open folder", command=lambda: _open_folder(folder.get())).pack(side="left")
+        ttk.Button(btns, text="Choose...", command=lambda: self._choose_folder(folder)).pack(side="left", padx=s(8))
+        ttk.Button(btns, text="Preview", command=self._preview_music).pack(side="left")
         self.music_count = ttk.Label(box, text="", style="Muted.TLabel")
         self.music_count.grid(row=2, column=0, columnspan=3, sticky="w")
         self._count_songs(folder.get())
-        ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
+        ttk.Label(f, wraplength=self.wrap, style="Muted.TLabel", text=(
             "Tip: with speakers, your mic hears a little of the music. At 30% that's usually fine. "
-            "Headphones keep transcripts cleanest.")).pack(anchor="w", pady=(4, 0))
+            "Headphones keep transcripts cleanest.")).pack(anchor="w", pady=(0, s(4)))
 
     def _count_songs(self, folder):
         n = len(music.list_songs(folder))
@@ -746,80 +1270,84 @@ class SettingsWindow:
                               "Loading songs... click Preview again in a moment (or add songs to the folder).")
 
     def _dictionary(self, f):
-        ttk.Label(f, text="Words, names and jargon Aqua Lite should always spell your way "
-                          "(sent to the recognizer and the formatter).", foreground="#555").pack(anchor="w")
-        row = ttk.Frame(f)
-        row.pack(fill="x", pady=6)
+        s = self._s
+        card = self._card(f, "Dictionary", sub="Words, names and jargon Aqua Lite should always spell your way "
+                                               "(sent to the recognizer and the formatter).")
+        row = ttk.Frame(card)
+        row.pack(fill="x", pady=(0, s(8)))
         self.dict_entry = ttk.Entry(row, width=40)
         self.dict_entry.pack(side="left")
         self.dict_entry.bind("<Return>", lambda _e: self._dict_add())
-        ttk.Button(row, text="Add word", command=self._dict_add).pack(side="left", padx=6)
+        ttk.Button(row, text="Add word", command=self._dict_add).pack(side="left", padx=s(8))
         ttk.Button(row, text="Remove selected", command=self._dict_remove).pack(side="left")
-        self.dict_list = tk.Listbox(f, height=8)
-        self.dict_list.pack(fill="both", expand=True)
+        self.dict_list = self._boxed(tk.Listbox(card, height=7))
+        self.dict_list.pack(fill="x")
         for w in self.cfg.get("dictionary", []):
             self.dict_list.insert("end", w)
 
-        ttk.Label(f, text="Replacements - whenever you say the left side, type the right side",
-                  foreground="#555").pack(anchor="w", pady=(12, 0))
-        row2 = ttk.Frame(f)
-        row2.pack(fill="x", pady=6)
-        self.rep_from, self.rep_to = ttk.Entry(row2, width=22), ttk.Entry(row2, width=30)
+        rep = self._card(f, "Replacements", sub="Whenever you say the left side, Aqua Lite types the right side.")
+        row2 = ttk.Frame(rep)
+        row2.pack(fill="x", pady=(0, s(8)))
+        self.rep_from, self.rep_to = ttk.Entry(row2, width=20), ttk.Entry(row2, width=26)
         self.rep_from.pack(side="left")
-        ttk.Label(row2, text="  ->  ").pack(side="left")
+        ttk.Label(row2, text="→", style="Muted.TLabel").pack(side="left", padx=s(8))
         self.rep_to.pack(side="left")
-        ttk.Button(row2, text="Add", command=self._rep_add).pack(side="left", padx=6)
+        ttk.Button(row2, text="Add", command=self._rep_add).pack(side="left", padx=s(8))
         ttk.Button(row2, text="Remove selected", command=lambda: _tree_remove(self.rep_tree)).pack(side="left")
-        self.rep_tree = ttk.Treeview(f, columns=("from", "to"), show="headings", height=5)
+        self.rep_tree = ttk.Treeview(rep, columns=("from", "to"), show="headings", height=5)
         self.rep_tree.heading("from", text="When I say")
         self.rep_tree.heading("to", text="Type")
-        self.rep_tree.pack(fill="both", expand=True)
+        self.rep_tree.pack(fill="x")
         for r in self.cfg.get("replacements", []):
             self.rep_tree.insert("", "end", values=(r["from"], r["to"]))
 
     def _snippets(self, f):
-        ttk.Label(f, text="Say a trigger phrase and Aqua Lite types the full text - emails, links, addresses, "
-                          "standard replies.", foreground="#555", wraplength=720).pack(anchor="w")
-        form = ttk.Frame(f)
-        form.pack(fill="x", pady=8)
+        s = self._s
+        card = self._card(f, "Snippets", sub="Say a trigger phrase and Aqua Lite types the full text - emails, links, "
+                                             "addresses, standard replies.")
+        form = ttk.Frame(card)
+        form.pack(fill="x", pady=(0, s(8)))
         ttk.Label(form, text="Trigger phrase").grid(row=0, column=0, sticky="w")
         self.snip_trigger = ttk.Entry(form, width=30)
-        self.snip_trigger.grid(row=0, column=1, sticky="w", padx=6)
-        ttk.Label(form, text="Expands to").grid(row=1, column=0, sticky="nw", pady=4)
-        self.snip_text = tk.Text(form, width=70, height=4, wrap="word")
-        self.snip_text.grid(row=1, column=1, sticky="w", padx=6, pady=4)
+        self.snip_trigger.grid(row=0, column=1, sticky="w", padx=s(8))
+        ttk.Label(form, text="Expands to").grid(row=1, column=0, sticky="nw", pady=s(6))
+        self.snip_text = self._boxed(tk.Text(form, width=60, height=4, wrap="word"))
+        self.snip_text.grid(row=1, column=1, sticky="w", padx=s(8), pady=s(6))
         btns = ttk.Frame(form)
-        btns.grid(row=2, column=1, sticky="w", padx=6)
+        btns.grid(row=2, column=1, sticky="w", padx=s(8))
         ttk.Button(btns, text="Add / update", command=self._snip_add).pack(side="left")
-        ttk.Button(btns, text="Remove selected", command=lambda: _tree_remove(self.snip_tree)).pack(side="left", padx=6)
-        self.snip_tree = ttk.Treeview(f, columns=("trigger", "text"), show="headings", height=8)
+        ttk.Button(btns, text="Remove selected", command=lambda: _tree_remove(self.snip_tree)).pack(side="left",
+                                                                                                  padx=s(8))
+        self.snip_tree = ttk.Treeview(card, columns=("trigger", "text"), show="headings", height=7)
         self.snip_tree.heading("trigger", text="Say")
         self.snip_tree.heading("text", text="Types")
-        self.snip_tree.column("trigger", width=180)
-        self.snip_tree.column("text", width=520)
-        self.snip_tree.pack(fill="both", expand=True)
+        self.snip_tree.column("trigger", width=s(170))
+        self.snip_tree.column("text", width=s(460))
+        self.snip_tree.pack(fill="x")
         self.snip_tree.bind("<<TreeviewSelect>>", self._snip_load)
         self.snip_full = {}
-        for s in self.cfg.get("snippets", []):
-            self._snip_insert(s["trigger"], s["text"])
+        for sn in self.cfg.get("snippets", []):
+            self._snip_insert(sn["trigger"], sn["text"])
 
     def _history(self, f):
+        s = self._s
         top = ttk.Frame(f)
         top.pack(fill="x")
+        ttk.Label(top, text="Search").pack(side="left", padx=(0, s(8)))
         self.hq = ttk.Entry(top, width=36)
         self.hq.pack(side="left")
         self.hq.bind("<KeyRelease>", lambda _e: self._hist_load())
-        ttk.Button(top, text="Copy", command=self._hist_copy).pack(side="left", padx=6)
+        ttk.Button(top, text="Copy", command=self._hist_copy).pack(side="left", padx=s(8))
         ttk.Button(top, text="Delete", command=self._hist_delete).pack(side="left")
         ttk.Button(top, text="Clear all", command=self._hist_clear).pack(side="right")
         cols = ("when", "app", "text")
         self.ht = ttk.Treeview(f, columns=cols, show="headings")
         for c, w in zip(cols, (120, 110, 480)):
             self.ht.heading(c, text=c.title())
-            self.ht.column(c, width=w, stretch=(c == "text"))
-        self.ht.pack(fill="both", expand=True, pady=8)
+            self.ht.column(c, width=s(w), stretch=(c == "text"))
+        self.ht.pack(fill="both", expand=True, pady=s(10))
         self.ht.bind("<Double-1>", lambda _e: self._hist_copy())
-        self.hdetail = tk.Text(f, height=6, wrap="word")
+        self.hdetail = self._boxed(tk.Text(f, height=6, wrap="word"))
         self.hdetail.pack(fill="x")
         self.ht.bind("<<TreeviewSelect>>", self._hist_show)
         self._hist_rows = {}
