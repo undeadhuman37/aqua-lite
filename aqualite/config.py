@@ -116,6 +116,7 @@ DEFAULTS = {
     "live_preview": True,                # show your words in the bar while you talk
     "private_mode": False,               # speech + AI formatting all on this PC (model built in, see localai.py)
     "local_ai_model": "qwen3-4b",        # which private-mode model
+    "private_idle_minutes": 10,          # free the private AI's memory after this long unused (0 = keep loaded)
     "instant_text_engine": "off",        # words appear while you talk: off | preview | gpu | deepgram (see instant.py)
     "deepgram_api_key": "",              # for the Deepgram instant-text engine
     "gpu_model": "auto",                 # graphics-card engine model: auto (picked for the card) or a gpu.MODELS name

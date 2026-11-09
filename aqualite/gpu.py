@@ -233,6 +233,8 @@ class GPUModel:
         with self.lock:
             if self.model is not None:
                 self.model = None
+                import gc
+                gc.collect()   # drop the last references now, so CTranslate2 returns the graphics memory at once
                 log.info("instant text: freed the graphics card (%s)", why)
 
     def _unload_when_idle(self):

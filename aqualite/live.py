@@ -17,6 +17,9 @@ WINDOW_SECS = 6.0     # how much recent audio each preview pass looks at
 EVERY_SECS = 0.7      # how often to refresh
 
 
+_ALL = []   # every loaded speech model in this module, so identical ones are shared
+
+
 class PreviewModel:
     """Its own small model, separate from the main one, so previews never queue in front of the real thing."""
 
@@ -25,11 +28,17 @@ class PreviewModel:
         self.threads = threads
         self.lock = threading.Lock()
         self.failed = False
+        _ALL.append(self)
 
     def load(self, name):
         with self.lock:
             if self.model is not None and self.name == name:
                 return self.model
+            for other in _ALL:   # the same model already loaded for something else: share it (saves its memory)
+                if other is not self and other.name == name and other.model is not None:
+                    self.model, self.name = other.model, name
+                    log.info("live model %s shared", name)
+                    return self.model
             from faster_whisper import WhisperModel
             self.model = WhisperModel(name, device="cpu", compute_type="int8", cpu_threads=self.threads)
             self.name = name

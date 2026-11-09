@@ -188,8 +188,11 @@ def chat(cfg, system, user, max_tokens=1500, timeout=25, provider=None):
         extra = {"max_tokens": max_tokens, "temperature": 0.2, **localai.request_extras(key)}
         if localai.MODELS[key].get("thinking"):
             user += "\n/no_think"   # Qwen3's own switch, in case the server ignores the template option
-        return _openai_style(base + "/v1/chat/completions", None, "local", system, user, max_tokens,
-                             max(timeout, 90), extra)
+        try:
+            return _openai_style(base + "/v1/chat/completions", None, "local", system, user, max_tokens,
+                                 max(timeout, 90), extra)
+        finally:
+            localai.touch()   # counts as use, so a long answer never trips the idle timer
     if provider == "custom":
         url = cfg["custom_base_url"].rstrip("/") + "/chat/completions"
         return _openai_style(url, cfg.get("custom_api_key"), cfg["custom_llm_model"], system, user,

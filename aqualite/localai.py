@@ -38,7 +38,8 @@ MODELS = {
                    "thinking": True},   # hybrid model: thinking gets switched off per request
 }
 DEFAULT_MODEL = "qwen3-4b"
-CONTEXT = 8192
+CONTEXT = 6144          # tokens: room for a 10-minute dictation plus instructions; less memory reserved than 8k
+idle_secs = 10 * 60     # free the model's memory after this long unused (0 = keep it); set from Settings
 UA = {"User-Agent": "AquaLite-private-mode"}
 
 
@@ -274,12 +275,15 @@ def _wait_healthy(port, proc, timeout):
 
 def server_command(exe, model_path, port):
     # only long-standing options, so any recent build accepts them (an unknown option makes the server quit)
-    return [exe, "-m", model_path, "--host", "127.0.0.1", "--port", str(port), "-c", str(CONTEXT), "-ngl", "99"]
+    # -np 1: one request at a time is all a dictation app needs, and one slot reserves the least memory
+    return [exe, "-m", model_path, "--host", "127.0.0.1", "--port", str(port), "-c", str(CONTEXT), "-ngl", "99",
+            "-np", "1"]
 
 
 def ensure(model_key, timeout=120):
     """Start the server for `model_key` if it isn't running. Returns the base URL. Thread-safe."""
     with _lock:
+        _touch()
         if _alive() and _server["model"] == model_key:
             return f"http://127.0.0.1:{_server['port']}"
         _stop_locked()
@@ -325,6 +329,30 @@ def ensure(model_key, timeout=120):
 def stop():
     with _lock:
         _stop_locked()
+
+
+_last_used = [0.0]
+
+
+def _touch():
+    _last_used[0] = time.time()
+
+
+touch = _touch
+
+
+def _idle_watch():
+    """Close the server (freeing its memory) after idle_secs without a request; it restarts when needed."""
+    while True:
+        time.sleep(20)
+        if idle_secs > 0 and _alive() and time.time() - _last_used[0] > idle_secs and not _lock.locked():
+            with _lock:
+                if _alive() and time.time() - _last_used[0] > idle_secs:
+                    log.info("private mode: freed the AI's memory after %d idle minutes", idle_secs // 60)
+                    _stop_locked()
+
+
+threading.Thread(target=_idle_watch, daemon=True, name="local-ai-idle").start()
 
 
 def _stop_locked():

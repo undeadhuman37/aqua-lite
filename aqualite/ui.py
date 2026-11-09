@@ -445,6 +445,22 @@ class SettingsWindow:
         ttk.Checkbutton(f, text="Private mode: keep my voice and text on this PC",
                         variable=self._var("private_mode", tk.BooleanVar),
                         command=self._private_toggled).pack(anchor="w", pady=(14, 2))
+        row = ttk.Frame(f)
+        row.pack(anchor="w", padx=(22, 0), pady=(4, 2))
+        ttk.Label(row, text="Free its memory after").pack(side="left")
+        pmins = tk.DoubleVar(value=float(self.cfg.get("private_idle_minutes", 10)))
+        self.v["private_idle_minutes"] = pmins
+        ptxt = ttk.Label(row, width=30)
+
+        def show_pidle(_v=None):
+            m = int(round(pmins.get()))
+            pmins.set(m)
+            ptxt.configure(text="never (keep it loaded)" if m == 0 else
+                           f"{m} minute{'s' if m != 1 else ''} unused (restarts as you talk)")
+        ttk.Scale(row, from_=0, to=60, orient="horizontal", length=240, variable=pmins,
+                  command=show_pidle).pack(side="left", padx=8)
+        ptxt.pack(side="left")
+        show_pidle()
         ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
             "Speech uses the offline model picked under Speech & AI (\"small\" is a good balance). With a graphics "
             "card the AI answers in about a second; on the processor alone it can take several seconds, so pick the "
@@ -915,6 +931,7 @@ class SettingsWindow:
         cfg["local_ai_model"] = self._ai_key()
         cfg["gpu_model"] = self._gpu_selected()
         cfg["gpu_idle_minutes"] = int(round(float(cfg.get("gpu_idle_minutes", 5) or 0)))
+        cfg["private_idle_minutes"] = int(round(float(cfg.get("private_idle_minutes", 10) or 0)))
         try:
             self._mem_save_typed()
         except (tk.TclError, AttributeError, OSError):

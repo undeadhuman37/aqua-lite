@@ -239,20 +239,17 @@ class FlowBarRenderer:
         y1 = H - self._u(12)
         return (cx - w // 2, y1 - h, cx + w // 2, y1)
 
-    def _glass(self, key, w, h, **kw):
-        if key not in self.cache:
-            box = self._box(w, h)
-            self.cache[key] = (box,) + glass_capsule(self.big, box, **kw)
-        return self.cache[key]
+    def _glass(self, w, h, **kw):
+        """Glass at 2x size: (box, base, over). Not cached itself: callers keep only the small pieces they need
+        (full 2x canvases are ~2 MB each, and toasts come in every width)."""
+        box = self._box(w, h)
+        return (box,) + glass_capsule(self.big, box, **kw)
 
     def _cap_glass(self, w, h, above_y):
-        key = ("cap", w)
-        if key not in self.cache:
-            W, _H = self.big
-            y1 = above_y - self._u(6)
-            box = (W // 2 - self._u(w) // 2, y1 - self._u(h), W // 2 + self._u(w) // 2, y1)
-            self.cache[key] = (box,) + glass_capsule(self.big, box, (232, 248, 255), (150, 205, 240), shadow=True)
-        return self.cache[key]
+        W, _H = self.big
+        y1 = above_y - self._u(6)
+        box = (W // 2 - self._u(w) // 2, y1 - self._u(h), W // 2 + self._u(w) // 2, y1)
+        return (box,) + glass_capsule(self.big, box, (232, 248, 255), (150, 205, 240), shadow=True)
 
     def warm_steps(self):
         """Small jobs that pre-build the glass for the common states and caption sizes, so the first recording
@@ -273,20 +270,23 @@ class FlowBarRenderer:
         """Glass with its gloss, downsampled once: everything that never moves, ready to copy each frame."""
         return Image.alpha_composite(base, over).reduce(SS)
 
-    def _live(self, key, box, base, over, margin):
+    def _live(self, key, w, h, margin_for, **kw):
         """Only the patch around the capsule changes from frame to frame. Cache that patch's glass (2x) and the
-        whole still frame (1x), so each frame redraws and shrinks just the patch instead of the full canvas."""
+        whole still frame (1x), so each frame redraws and shrinks just the patch instead of the full canvas.
+        Returns (patch_rect, patch_base, patch_over, still_frame, box)."""
         ck = ("live", key)
         if ck not in self.cache:
+            box, base, over = self._glass(w, h, **kw)
+            margin = margin_for(box)
             W, H = self.big
             x0, y0, x1, y1 = box
             r = (max(0, (x0 - margin) // SS * SS), max(0, (y0 - margin) // SS * SS),
                  min(W, -(-(x1 + margin) // SS) * SS), min(H, -(-(y1 + margin) // SS) * SS))
-            self.cache[ck] = (r, base.crop(r), over.crop(r), self._flat(base, over))
+            self.cache[ck] = (r, base.crop(r), over.crop(r), self._flat(base, over), box)
         return self.cache[ck]
 
     def _compose(self, live, patch):
-        r, _b, _o, still = live
+        r, _b, _o, still, _box = live
         img = still.copy()
         img.paste(patch.reduce(SS), (r[0] // SS, r[1] // SS))
         return img
@@ -374,21 +374,21 @@ class FlowBarRenderer:
             return Image.new("RGBA", self.size, (0, 0, 0, 0))
         if state == "idle":
             if "idle_img" not in self.cache:
-                box, base, over = self._glass("idle", 60, 15)
+                box, base, over = self._glass(60, 15)
                 self.cache["idle_img"] = self._flat(base, over)
             return self.cache["idle_img"].copy()
         if state in ("recording", "locked", "command"):
             wide = state != "recording"
             w = 258 if wide else 184
             glow = (170, 120, 255) if state == "command" else (90, 230, 255)
-            box, base, over = self._glass(("rec", state), w, 42, glow=glow)
+            orb_r = self._u(9)
+            half = int(orb_r * 3.8)   # the pulsing glow reaches this far around the orb
+            live = self._live(("rec", state), w, 42,
+                              lambda b: max(SS * 2, half - self._u(22), half - (b[3] - b[1]) // 2) + SS, glow=glow)
+            (rx, ry, _rx1, _ry1), patch_base, patch_over, _still, box = live
             x0, y0, x1, y1 = box
             cy = (y0 + y1) // 2
-            orb_r, orb_x = self._u(9), x0 + self._u(22)
-            half = int(orb_r * 3.8)   # the pulsing glow reaches this far around the orb
-            live = self._live(("rec", state), box, base, over,
-                              max(SS * 2, half - (orb_x - x0), half - (y1 - y0) // 2) + SS)
-            (rx, ry, _rx1, _ry1), patch_base, patch_over, _still = live
+            orb_x = x0 + self._u(22)
             img = patch_base.copy()               # everything below is drawn in patch coordinates
             lv = levels[-1] if levels else 0.0
             self.bubbles.step(box, lv, dt)
@@ -417,11 +417,10 @@ class FlowBarRenderer:
                 self._caption(out, caption, y0, min(caption_alpha, 1.0))
             return self._finish(out)
         if state == "processing":
-            box, base, over = self._glass("proc", 100, 36, glow=(90, 230, 255))
+            live = self._live("proc", 100, 36, lambda b: SS * 3, glow=(90, 230, 255))
+            (rx, ry, _rx1, _ry1), patch_base, patch_over, _still, box = live
             x0, y0, x1, y1 = box
             cy = (y0 + y1) // 2
-            live = self._live("proc", box, base, over, SS * 3)
-            (rx, ry, _rx1, _ry1), patch_base, patch_over, _still = live
             img = patch_base.copy()
             for i in range(3):
                 ph = t * 6.0 - i * 0.9
@@ -436,7 +435,7 @@ class FlowBarRenderer:
         if key not in self.cache:
             tw = self.font.getlength(text) / self.scale
             w = min(self.W - 16, int(tw) + 64)
-            box, base, over = self._glass(("toast", w), w, 36)
+            box, base, over = self._glass(w, 36)
             img = base.copy()
             x0, y0, x1, y1 = box
             cy = (y0 + y1) // 2

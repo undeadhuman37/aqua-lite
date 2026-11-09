@@ -144,9 +144,9 @@ class App:
     def _preload(self):
         if stt.resolve_engine(self.cfg) == "local":
             threading.Thread(target=self._safe_load, daemon=True).start()
-        if self.cfg.get("live_preview", True) and live.PREVIEW.model is None:
-            live.PREVIEW.preload(self.cfg)
         engine = self.cfg.get("instant_text_engine", "off")
+        if self.cfg.get("live_preview", True) and engine == "off" and live.PREVIEW.model is None:
+            live.PREVIEW.preload(self.cfg)   # with instant text on, the bubble only shows in code editors: load then
         if engine == "preview" and live.INSTANT.model is None:
             live.INSTANT.preload(self.cfg)
         elif engine == "gpu" and gpu.libraries_installed():
@@ -154,6 +154,7 @@ class App:
         gpu.GPU.configure(self.cfg)   # model choice + idle time (frees the card if the engine was switched off)
         if engine != "gpu" and gpu.GPU.model is not None:
             gpu.GPU.unload("instant text switched to another option")
+        localai.idle_secs = max(0.0, float(self.cfg.get("private_idle_minutes", 10) or 0)) * 60
         if llm.resolve_provider(self.cfg) == "local":  # load the private AI now, so the first dictation isn't slow
             threading.Thread(target=self._warm_local_ai, daemon=True, name="local-ai").start()
         elif not self.cfg.get("private_mode") and localai.running():
@@ -185,6 +186,9 @@ class App:
             return
         self.rec_started, self.rec_command = time.time(), command
         self.grab = None
+        if llm.resolve_provider(self.cfg) == "local" and not localai.running():
+            # the private AI was freed while idle: start it now, so it's ready by the time you finish talking
+            threading.Thread(target=self._warm_local_ai, daemon=True, name="local-ai").start()
         if IS_WIN and self.cfg.get("screen_context", False):
             try:
                 proc, title, _pid = winapi.foreground()
