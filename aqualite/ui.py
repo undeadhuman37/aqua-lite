@@ -282,9 +282,9 @@ class SettingsWindow:
          "A small speech model on your processor types words as you talk. Fast but rough: expect wrong words until "
          "you let go and the polished version replaces them. Uses some processor power while you talk."),
         ("gpu", "Graphics card - NVIDIA only",
-         "REQUIRES an NVIDIA graphics card with 4 GB or more of graphics memory. Whisper large-v3-turbo runs on the "
-         "card, so the live words are almost the final text. One-time download of about 2.6 GB. The card only works "
-         "while you talk, and its memory is freed after 15 minutes without dictating."),
+         "REQUIRES an NVIDIA graphics card. A Whisper model runs on the card, so the live words are almost the "
+         "final text - pick one below (the recommended one fits your card). One-time download: about 1 GB of NVIDIA "
+         "libraries plus the model. The card only works while you talk."),
         ("deepgram", "Deepgram - any PC, needs internet",
          "REQUIRES a Deepgram account (console.deepgram.com: free credit when you sign up, then about $0.46 per hour "
          "of talking). Your voice streams to Deepgram while you talk and accurate words arrive in about 0.3 s. "
@@ -306,9 +306,32 @@ class SettingsWindow:
             if key == "gpu":
                 row = ttk.Frame(box)
                 row.pack(anchor="w", padx=(24, 0), pady=(4, 0))
-                self.gpu_btn = ttk.Button(row, text="Set up graphics card", command=self._gpu_setup)
+                ttk.Label(row, text="Model").pack(side="left")
+                self.gpu_keys = list(gpu.MODELS)
+                self.gpu_model = ttk.Combobox(row, state="readonly", width=78, values=["Checking your card..."])
+                self.gpu_model.current(0)
+                self.gpu_model.pack(side="left", padx=8)
+                row2 = ttk.Frame(box)
+                row2.pack(anchor="w", padx=(24, 0), pady=(4, 0))
+                ttk.Label(row2, text="Free the card after").pack(side="left")
+                mins = tk.DoubleVar(value=float(self.cfg.get("gpu_idle_minutes", 5)))
+                self.v["gpu_idle_minutes"] = mins
+                idle_txt = ttk.Label(row2, width=26)
+
+                def show_idle(_v=None):
+                    m = int(round(mins.get()))
+                    mins.set(m)
+                    idle_txt.configure(text="never (keep it loaded)" if m == 0 else
+                                       f"{m} minute{'s' if m != 1 else ''} without talking")
+                ttk.Scale(row2, from_=0, to=60, orient="horizontal", length=240, variable=mins,
+                          command=show_idle).pack(side="left", padx=8)
+                idle_txt.pack(side="left")
+                show_idle()
+                row3 = ttk.Frame(box)
+                row3.pack(anchor="w", padx=(24, 0), pady=(4, 0))
+                self.gpu_btn = ttk.Button(row3, text="Set up graphics card", command=self._gpu_setup)
                 self.gpu_btn.pack(side="left")
-                self.gpu_status = ttk.Label(row, text="Checking for an NVIDIA card...", style="Muted.TLabel")
+                self.gpu_status = ttk.Label(row3, text="Checking for an NVIDIA card...", style="Muted.TLabel")
                 self.gpu_status.pack(side="left", padx=10)
             if key == "deepgram":
                 row = ttk.Frame(box)
@@ -325,8 +348,26 @@ class SettingsWindow:
         except (tk.TclError, RuntimeError):
             pass
 
+    def _gpu_selected(self):
+        """The model picked in the list, or 'auto' when it still shows the recommendation."""
+        i = self.gpu_model.current()
+        if i < 0 or not getattr(self, "gpu_ready_list", False):
+            return self.cfg.get("gpu_model", "auto")
+        key = self.gpu_keys[i]
+        # still on the recommendation: keep "auto", so a new graphics card gets its own recommendation
+        return "auto" if (key == self.gpu_best and self.cfg.get("gpu_model", "auto") == "auto") else key
+
+    def _gpu_fill(self, mem):
+        best = self.gpu_best = gpu.recommend(mem, self.cfg.get("language", "auto"))
+        cur = self.cfg.get("gpu_model", "auto")
+        cur = cur if cur in gpu.MODELS else best
+        self.gpu_model.configure(values=[gpu.choice_label(k, mem, best) for k in self.gpu_keys])
+        self.gpu_model.current(self.gpu_keys.index(cur))
+        self.gpu_ready_list = True
+
     def _gpu_check(self):
         has, name, mem = gpu.detect()
+        self.win.after(0, lambda: self._gpu_fill(mem if has else 0))
         if not has:
             self._gpu_say("No NVIDIA graphics card found - this option won't work on this PC.")
             self.win.after(0, lambda: self.gpu_btn.configure(state="disabled"))
@@ -341,7 +382,7 @@ class SettingsWindow:
             self._gpu_say(f"{card}: set up. The model loads when you next talk.")
             self.win.after(0, lambda: self.gpu_btn.configure(text="Test it"))
         else:
-            self._gpu_say(f"{card} found. Click Set up (about 2.6 GB download).")
+            self._gpu_say(f"{card} found. Pick a model and click Set up.")
 
     def _gpu_setup(self):
         if self.gpu_job:
@@ -357,10 +398,13 @@ class SettingsWindow:
                 if not gpu.libraries_installed():
                     self._gpu_say("Installing NVIDIA's libraries (about 1 GB)...")
                     gpu.install_libraries(lambda line: self._gpu_say("Installing: " + line[:70]))
-                self._gpu_say("Loading the model onto the card (first time downloads about 1.6 GB)...")
+                key = self._gpu_selected()
+                gpu.GPU.want = key
+                size = gpu.MODELS.get(key if key in gpu.MODELS else gpu.MODEL)["size"] / 1000
+                self._gpu_say(f"Loading the model onto the card (first time downloads about {size:.1f} GB)...")
                 gpu.GPU.load()
                 secs = gpu.GPU.bench()
-                self._gpu_say(f"Ready: {secs:.2f}s per pass on {name}. Pick this option and click Save.")
+                self._gpu_say(f"Ready: {gpu.GPU.key}, {secs:.2f}s per pass on {name}. Pick this option and Save.")
                 self.win.after(0, lambda: self.v["instant_text_engine"].set("gpu"))
             except Exception as e:
                 gpu.GPU.failed = str(e)
@@ -869,6 +913,8 @@ class SettingsWindow:
         cfg["styles"] = {k: cb.get_key() for k, cb in self.style_boxes.items()}
         cfg["dictionary"] = list(self.dict_list.get(0, "end"))
         cfg["local_ai_model"] = self._ai_key()
+        cfg["gpu_model"] = self._gpu_selected()
+        cfg["gpu_idle_minutes"] = int(round(float(cfg.get("gpu_idle_minutes", 5) or 0)))
         try:
             self._mem_save_typed()
         except (tk.TclError, AttributeError, OSError):

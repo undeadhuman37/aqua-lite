@@ -151,6 +151,9 @@ class App:
             live.INSTANT.preload(self.cfg)
         elif engine == "gpu" and gpu.libraries_installed():
             gpu.GPU.preload(self.cfg)
+        gpu.GPU.configure(self.cfg)   # model choice + idle time (frees the card if the engine was switched off)
+        if engine != "gpu" and gpu.GPU.model is not None:
+            gpu.GPU.unload("instant text switched to another option")
         if llm.resolve_provider(self.cfg) == "local":  # load the private AI now, so the first dictation isn't slow
             threading.Thread(target=self._warm_local_ai, daemon=True, name="local-ai").start()
         elif not self.cfg.get("private_mode") and localai.running():

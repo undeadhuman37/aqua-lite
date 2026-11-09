@@ -118,6 +118,8 @@ DEFAULTS = {
     "local_ai_model": "qwen3-4b",        # which private-mode model
     "instant_text_engine": "off",        # words appear while you talk: off | preview | gpu | deepgram (see instant.py)
     "deepgram_api_key": "",              # for the Deepgram instant-text engine
+    "gpu_model": "auto",                 # graphics-card engine model: auto (picked for the card) or a gpu.MODELS name
+    "gpu_idle_minutes": 5,               # free the graphics card after this long without talking (0 = keep loaded)
     "instant_text_model": "auto",        # auto = "small" if this PC is fast enough, else "base"
     "instant_text_skip_apps": [],        # process names to always insert at the end instead (code editors already are)
     "live_preview_model": "base",        # small fast offline model used only for the preview

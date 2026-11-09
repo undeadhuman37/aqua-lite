@@ -290,6 +290,9 @@ def check_instant():
     assert "model=nova-3" in dg and "language=ar" in dg and "keyterm=Huilin" in dg and "encoding=linear16" in dg
     from . import gpu
     assert isinstance(gpu.lib_dirs(), list) and gpu.MODEL == "large-v3-turbo"
+    assert gpu.recommend(2048) == "small" and gpu.recommend(8192) == "large-v3-turbo" and gpu.recommend(0) == gpu.MODEL
+    assert gpu.compute_for("large-v3", 4096) == "int8_float16" and gpu.compute_for("small", 4096) == "float16"
+    assert not gpu.fits("large-v3", 2048) and "recommended" in gpu.choice_label("small", 2048, "small")
     assert instant.join_words([(" Hello", 0, 1), ("world.", 1, 2)], first=False) == " Hello world."
     assert instant.presses("caf\u00e9") == 4 and instant.presses("cafe\u0301") == 4 and instant.presses("") == 0
     ok = instant.safe_to_replace
