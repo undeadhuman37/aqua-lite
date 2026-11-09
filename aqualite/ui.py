@@ -4,10 +4,11 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import aero, history, hotkeys, llm, localai, music, stt
+from . import aero, gpu, history, hotkeys, llm, localai, memory, music, stt
 from .config import APP_NAME, VERSION
 
 LANGS = [("auto", "Auto-detect"), ("en", "English"), ("ar", "Arabic"), ("fr", "French"), ("es", "Spanish"),
@@ -113,7 +114,8 @@ class SettingsWindow:
         nb.pack(fill="both", expand=True, padx=10, pady=(8, 0))
         self.nb = nb
         for title, build in (("Home", self._home), ("Shortcuts & mic", self._general),
-                             ("Speech & AI", self._ai), ("Private", self._private), ("Style", self._style),
+                             ("Speech & AI", self._ai), ("Instant text", self._instant), ("Private", self._private),
+                             ("Style", self._style), ("Memory", self._memory),
                              ("Music", self._music),
                              ("Dictionary", self._dictionary), ("Snippets", self._snippets),
                              ("History", self._history)):
@@ -213,8 +215,7 @@ class SettingsWindow:
         self.lang = _pair_combo(f, LANGS, self.cfg.get("language", "auto"), width=22)
         self._row(f, r, "Language", self.lang, "Auto handles Arabic, English and mixing")
         r += 1
-        for key, label in (("instant_text", "Instant text: type my words while I talk (polished when I let go)"),
-                           ("live_preview", "Show my words in the bar while I talk"),
+        for key, label in (("live_preview", "Show my words in the bar while I talk (when instant text is off)"),
                            ("learn_corrections", "Learn words I correct right after dictating"),
                            ("voice_enter", 'Say "press enter" or "send it" at the end to press Enter'),
                            ("double_tap_handsfree", "Tap the shortcut twice for hands-free"),
@@ -274,6 +275,103 @@ class SettingsWindow:
         ttk.Label(keys, text="Get a free Groq key at console.groq.com/keys - it powers both speech and formatting.",
                   foreground="#777").grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 0))
         ttk.Button(f, text="Test AI connection", command=self._test_ai).pack(anchor="w", pady=10)
+
+    INSTANT_ENGINES = [
+        ("off", "Off", "Your text appears when you let go, already polished. Works on every PC."),
+        ("preview", "Quick preview - any PC",
+         "A small speech model on your processor types words as you talk. Fast but rough: expect wrong words until "
+         "you let go and the polished version replaces them. Uses some processor power while you talk."),
+        ("gpu", "Graphics card - NVIDIA only",
+         "REQUIRES an NVIDIA graphics card with 4 GB or more of graphics memory. Whisper large-v3-turbo runs on the "
+         "card, so the live words are almost the final text. One-time download of about 2.6 GB. The card only works "
+         "while you talk, and its memory is freed after 15 minutes without dictating."),
+        ("deepgram", "Deepgram - any PC, needs internet",
+         "REQUIRES a Deepgram account (console.deepgram.com: free credit when you sign up, then about $0.46 per hour "
+         "of talking). Your voice streams to Deepgram while you talk and accurate words arrive in about 0.3 s. "
+         "Letting go is faster too, because the transcript is already done."),
+    ]
+
+    def _instant(self, f):
+        ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
+            "Instant text types your words into the app while you're still talking. When you let go, they're replaced "
+            "with the polished version, like always. Pick how the live words are made - only choose an option if you "
+            "have what it needs.")).pack(anchor="w", pady=(0, 8))
+        var = tk.StringVar(value=self.cfg.get("instant_text_engine", "off"))
+        self.v["instant_text_engine"] = var
+        for key, title, desc in self.INSTANT_ENGINES:
+            box = ttk.Frame(f)
+            box.pack(fill="x", pady=(6, 0))
+            ttk.Radiobutton(box, text=title, value=key, variable=var).pack(anchor="w")
+            ttk.Label(box, text=desc, wraplength=700, style="Muted.TLabel").pack(anchor="w", padx=(24, 0))
+            if key == "gpu":
+                row = ttk.Frame(box)
+                row.pack(anchor="w", padx=(24, 0), pady=(4, 0))
+                self.gpu_btn = ttk.Button(row, text="Set up graphics card", command=self._gpu_setup)
+                self.gpu_btn.pack(side="left")
+                self.gpu_status = ttk.Label(row, text="Checking for an NVIDIA card...", style="Muted.TLabel")
+                self.gpu_status.pack(side="left", padx=10)
+            if key == "deepgram":
+                row = ttk.Frame(box)
+                row.pack(anchor="w", padx=(24, 0), pady=(4, 0))
+                ttk.Label(row, text="Deepgram API key").pack(side="left")
+                ttk.Entry(row, textvariable=self._var("deepgram_api_key"), width=46, show="\u2022").pack(
+                    side="left", padx=8)
+        self.gpu_job = None
+        threading.Thread(target=self._gpu_check, daemon=True).start()
+
+    def _gpu_say(self, text):
+        try:
+            self.win.after(0, lambda: self.gpu_status.winfo_exists() and self.gpu_status.configure(text=text))
+        except (tk.TclError, RuntimeError):
+            pass
+
+    def _gpu_check(self):
+        has, name, mem = gpu.detect()
+        if not has:
+            self._gpu_say("No NVIDIA graphics card found - this option won't work on this PC.")
+            self.win.after(0, lambda: self.gpu_btn.configure(state="disabled"))
+            return
+        card = f"{name}" + (f" ({mem / 1024:.0f} GB)" if mem else "")
+        if mem and mem < 3500:
+            self._gpu_say(f"{card}: probably too little graphics memory for this.")
+        elif gpu.GPU.model is not None:
+            self._gpu_say(f"{card}: ready.")
+            self.win.after(0, lambda: self.gpu_btn.configure(text="Set up again"))
+        elif gpu.libraries_installed():
+            self._gpu_say(f"{card}: set up. The model loads when you next talk.")
+            self.win.after(0, lambda: self.gpu_btn.configure(text="Test it"))
+        else:
+            self._gpu_say(f"{card} found. Click Set up (about 2.6 GB download).")
+
+    def _gpu_setup(self):
+        if self.gpu_job:
+            return
+        self.gpu_job = True
+        self.gpu_btn.configure(state="disabled")
+
+        def run():
+            try:
+                has, name, mem = gpu.detect()
+                if not has:
+                    raise RuntimeError("no NVIDIA graphics card found")
+                if not gpu.libraries_installed():
+                    self._gpu_say("Installing NVIDIA's libraries (about 1 GB)...")
+                    gpu.install_libraries(lambda line: self._gpu_say("Installing: " + line[:70]))
+                self._gpu_say("Loading the model onto the card (first time downloads about 1.6 GB)...")
+                gpu.GPU.load()
+                secs = gpu.GPU.bench()
+                self._gpu_say(f"Ready: {secs:.2f}s per pass on {name}. Pick this option and click Save.")
+                self.win.after(0, lambda: self.v["instant_text_engine"].set("gpu"))
+            except Exception as e:
+                gpu.GPU.failed = str(e)
+                self._gpu_say(f"Didn't work: {str(e)[:120]}")
+            finally:
+                self.gpu_job = None
+                try:
+                    self.win.after(0, lambda: self.gpu_btn.configure(state="normal"))
+                except (tk.TclError, RuntimeError):
+                    pass
+        threading.Thread(target=run, daemon=True, name="gpu-setup").start()
 
     def _private(self, f):
         ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
@@ -422,6 +520,104 @@ class SettingsWindow:
         ttk.Entry(smart, textvariable=self.blocked, width=60).grid(row=4, column=1, columnspan=2, sticky="w",
                                                                    pady=(6, 0))
         self._count_edits()
+
+    def _memory(self, f):
+        ttk.Label(f, wraplength=740, style="Muted.TLabel", text=(
+            "How you write, as Aqua Lite has learned it from your edits. It's used every time it formats a "
+            "dictation, and rebuilt by your AI every few new edits. Change anything you like here - add or remove "
+            "lines - and click Save. Only style is kept here, never what your messages were about.")).pack(anchor="w")
+        prof = memory.load()
+        self.mem_text = {}
+        for key, label in memory.KINDS:
+            box = ttk.LabelFrame(f, text=label, padding=(8, 4))
+            box.pack(fill="x", pady=3)
+            t = tk.Text(box, height=3, wrap="word", relief="flat", font=("Segoe UI", 10))
+            t.insert("1.0", prof["styles"].get(key, ""))
+            t.pack(fill="x")
+            self.mem_text[key] = t
+        self.mem_status = ttk.Label(f, text="", style="Muted.TLabel")
+        self.mem_status.pack(anchor="w", pady=(4, 2))
+        row = ttk.Frame(f)
+        row.pack(anchor="w", pady=4)
+        ttk.Button(row, text="Update from my edits now", command=self._mem_update).pack(side="left")
+        ttk.Button(row, text="Export my memory...", command=self._mem_export).pack(side="left", padx=6)
+        ttk.Button(row, text="Import...", command=self._mem_import).pack(side="left")
+        self._mem_refresh_status(prof)
+
+    def _mem_refresh_status(self, prof=None):
+        prof = prof or memory.load()
+        try:
+            n = history.correction_count()
+        except Exception:
+            n = 0
+        when = time.strftime("%d %b %Y, %H:%M", time.localtime(prof["updated"])) if prof["updated"] else "not yet"
+        self.mem_status.configure(text=f"Learned from {n} edit{'s' if n != 1 else ''} - profile updated: {when}")
+
+    def _mem_typed(self):
+        return {k: memory.tidy(self.mem_text[k].get("1.0", "end")) for k, _ in memory.KINDS}
+
+    def _mem_save_typed(self):
+        prof = memory.load()
+        typed = self._mem_typed()
+        if typed != prof["styles"]:
+            prof["styles"] = typed
+            prof["updated"] = time.time()
+            memory.save(prof)
+
+    def _mem_reload(self):
+        prof = memory.load()
+        for k, _ in memory.KINDS:
+            self.mem_text[k].delete("1.0", "end")
+            self.mem_text[k].insert("1.0", prof["styles"].get(k, ""))
+        self._mem_refresh_status(prof)
+
+    def _mem_update(self):
+        self._mem_save_typed()   # so the AI starts from what you wrote
+        self.mem_status.configure(text="Updating from your edits...")
+
+        def done(changed, msg):
+            def ui():
+                if not self.win.winfo_exists():
+                    return
+                self._mem_reload()
+                self.mem_status.configure(text=msg + " - " + self.mem_status.cget("text"))
+            self.win.after(0, ui)
+        self.app.update_memory(force=True, done=done)
+
+    def _mem_export(self):
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(parent=self.win, title="Export my Aqua Lite memory",
+                                            defaultextension=".json", initialfile="aqualite-memory.json",
+                                            filetypes=[("Aqua Lite memory", "*.json")])
+        if not path:
+            return
+        self._mem_save_typed()
+        import json
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(memory.export_bundle(self._collect(), history.all_corrections()), fh, indent=2,
+                      ensure_ascii=False)
+        messagebox.showinfo(APP_NAME, "Saved. Import it on another PC from Settings > Memory.", parent=self.win)
+
+    def _mem_import(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(parent=self.win, title="Import Aqua Lite memory",
+                                          filetypes=[("Aqua Lite memory", "*.json")])
+        if not path:
+            return
+        import json
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            cfg = self._collect()
+            summary = memory.import_bundle(cfg, data, history.add_correction)
+        except (OSError, ValueError) as e:
+            messagebox.showerror(APP_NAME, f"Couldn't import that file: {e}", parent=self.win)
+            return
+        self.app.apply_settings(cfg)
+        messagebox.showinfo(APP_NAME, f"Imported {summary}.", parent=self.win)
+        tab = self.nb.index("current")
+        self.win.destroy()
+        self.app.open_settings(tab)
 
     def _count_edits(self):
         try:
@@ -673,6 +869,10 @@ class SettingsWindow:
         cfg["styles"] = {k: cb.get_key() for k, cb in self.style_boxes.items()}
         cfg["dictionary"] = list(self.dict_list.get(0, "end"))
         cfg["local_ai_model"] = self._ai_key()
+        try:
+            self._mem_save_typed()
+        except (tk.TclError, AttributeError, OSError):
+            pass
         cfg["context_blocked_apps"] = [a.strip().lower().removesuffix(".exe") for a in self.blocked.get().split(",")
                                        if a.strip()]
         cfg["replacements"] = [{"from": str(self.rep_tree.item(i)["values"][0]), "to": str(self.rep_tree.item(i)["values"][1])}
@@ -690,6 +890,10 @@ class SettingsWindow:
             float(cfg.get("handsfree_silence_secs") or 0)
             if cfg.get("private_mode") and not localai.ready(cfg.get("local_ai_model", localai.DEFAULT_MODEL)):
                 raise ValueError("private mode needs the selected AI model downloaded first (Private tab)")
+            if cfg.get("instant_text_engine") == "gpu" and not gpu.libraries_installed():
+                raise ValueError("set up the graphics card first (Instant text tab), or pick another option")
+            if cfg.get("instant_text_engine") == "deepgram" and not cfg.get("deepgram_api_key", "").strip():
+                raise ValueError("instant text with Deepgram needs a Deepgram API key (Instant text tab)")
         except ValueError as e:
             messagebox.showerror(APP_NAME, f"Setting problem: {e}", parent=self.win)
             return

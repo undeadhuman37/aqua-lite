@@ -71,7 +71,7 @@ def build(cfg, status=None):
     for k in KEEP_SETTINGS:
         if k in cfg:
             lines.append(f"  {k}: {cfg[k]}")
-    lines.append(f"  API keys set: {', '.join(n for n in ('groq', 'openai', 'anthropic', 'custom') if cfg.get(n + '_api_key')) or 'none'}")
+    lines.append(f"  API keys set: {', '.join(n for n in ('groq', 'openai', 'anthropic', 'custom', 'deepgram') if cfg.get(n + '_api_key')) or 'none'}")
     lines.append(f"  dictionary words: {len(cfg.get('dictionary', []))}, snippets: {len(cfg.get('snippets', []))}")
     d = config.data_dir()
     lines += ["", f"Recent log (last {LOG_LINES} lines, dictated text removed):"]

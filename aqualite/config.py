@@ -116,7 +116,8 @@ DEFAULTS = {
     "live_preview": True,                # show your words in the bar while you talk
     "private_mode": False,               # speech + AI formatting all on this PC (model built in, see localai.py)
     "local_ai_model": "qwen3-4b",        # which private-mode model
-    "instant_text": True,                # type your words into the app while you talk, polished when you let go
+    "instant_text_engine": "off",        # words appear while you talk: off | preview | gpu | deepgram (see instant.py)
+    "deepgram_api_key": "",              # for the Deepgram instant-text engine
     "instant_text_model": "auto",        # auto = "small" if this PC is fast enough, else "base"
     "instant_text_skip_apps": [],        # process names to always insert at the end instead (code editors already are)
     "live_preview_model": "base",        # small fast offline model used only for the preview

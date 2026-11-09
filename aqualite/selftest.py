@@ -286,6 +286,10 @@ def check_instant():
     st.step()
     assert box[0] == "Re: Hey Patricio" and st.typed == "Hey Patricio"
     assert instant.common_prefix("abc", "abd") == 2
+    dg = instant.DeepgramStreamer(Rec(), {"dictionary": ["Huilin"], "language": "ar"}, "k", typer).params()
+    assert "model=nova-3" in dg and "language=ar" in dg and "keyterm=Huilin" in dg and "encoding=linear16" in dg
+    from . import gpu
+    assert isinstance(gpu.lib_dirs(), list) and gpu.MODEL == "large-v3-turbo"
     assert instant.join_words([(" Hello", 0, 1), ("world.", 1, 2)], first=False) == " Hello world."
     assert instant.presses("caf\u00e9") == 4 and instant.presses("cafe\u0301") == 4 and instant.presses("") == 0
     ok = instant.safe_to_replace

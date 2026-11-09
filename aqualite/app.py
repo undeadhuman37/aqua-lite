@@ -7,8 +7,8 @@ import threading
 import time
 import tkinter as tk
 
-from . import (audio, config, context, deps, edits, history, hotkeys, instant, learn, live, llm, localai, memory, music,
-               report, sounds, stt, textproc, updater)
+from . import (audio, config, context, deps, edits, gpu, history, hotkeys, instant, learn, live, llm, localai, memory,
+               music, report, sounds, stt, textproc, updater)
 from .overlay import FlowBar
 
 IS_WIN = sys.platform == "win32"
@@ -35,6 +35,7 @@ class App:
         self.settings = None
         self.icon_path = os.path.join(HERE, "assets", "aqualite.ico")
 
+        gpu.prepare()   # NVIDIA's libraries (if installed for instant text) must be findable before CUDA starts
         if IS_WIN:
             winapi.set_app_id()   # our own taskbar identity, so Windows shows our logo instead of Python's
             winapi.set_dpi_aware()
@@ -145,8 +146,11 @@ class App:
             threading.Thread(target=self._safe_load, daemon=True).start()
         if self.cfg.get("live_preview", True) and live.PREVIEW.model is None:
             live.PREVIEW.preload(self.cfg)
-        if self.cfg.get("instant_text", True) and live.INSTANT.model is None:
+        engine = self.cfg.get("instant_text_engine", "off")
+        if engine == "preview" and live.INSTANT.model is None:
             live.INSTANT.preload(self.cfg)
+        elif engine == "gpu" and gpu.libraries_installed():
+            gpu.GPU.preload(self.cfg)
         if llm.resolve_provider(self.cfg) == "local":  # load the private AI now, so the first dictation isn't slow
             threading.Thread(target=self._warm_local_ai, daemon=True, name="local-ai").start()
         elif not self.cfg.get("private_mode") and localai.running():
@@ -204,10 +208,25 @@ class App:
     def _start_instant(self):
         """Type words into the focused app while the user talks (see instant.py)."""
         cfg = self.cfg
-        if not (IS_WIN and cfg.get("instant_text", True)) or live.INSTANT.failed:
+        engine = cfg.get("instant_text_engine", "off")
+        if not IS_WIN or engine not in ("preview", "gpu", "deepgram"):
             return
-        if live.INSTANT.model is None or live.INSTANT.loading:  # still loading / picking: not this time
-            live.INSTANT.preload(cfg)
+        model = None
+        if engine == "preview":
+            if live.INSTANT.failed:
+                return
+            if live.INSTANT.model is None or live.INSTANT.loading:  # still loading / picking: not this time
+                live.INSTANT.preload(cfg)
+                return
+            model = live.INSTANT
+        elif engine == "gpu":
+            gpu.GPU.touch()
+            if gpu.GPU.model is None:   # first time, or freed after a long idle: load now, live from the next one
+                if gpu.libraries_installed():
+                    gpu.GPU.preload(cfg)
+                return
+            model = gpu.GPU
+        elif not cfg.get("deepgram_api_key"):
             return
         try:
             proc, title, pid = winapi.foreground()
@@ -244,9 +263,13 @@ class App:
             return instant.safe_to_replace(text, before, exact, False) if text else True
 
         # no live-words bubble here: the words are going straight into the text box
-        st = instant.Streamer(self.recorder, cfg, live.INSTANT, type_here, before_first,
-                              allow=lambda: not instant.is_password_box(),
-                              delete_fn=backspace_here, check=box_ends_with)
+        common = dict(before_first=before_first, allow=lambda: not instant.is_password_box(),
+                      delete_fn=backspace_here, check=box_ends_with)
+        if engine == "deepgram":
+            st = instant.DeepgramStreamer(self.recorder, cfg, cfg["deepgram_api_key"], type_here,
+                                          on_error=lambda msg: self.post("toast", msg, "warn", 5), **common)
+        else:
+            st = instant.Streamer(self.recorder, cfg, model, type_here, **common)
         self.instant = (st, (hwnd, proc, title, pid))
         st.start()
 
@@ -359,9 +382,13 @@ class App:
                              if self.cfg.get("private_mode") else "off"),
             "live words model": ("failed" if live.PREVIEW.failed else
                                  f"{live.PREVIEW.name} ready" if live.PREVIEW.model else "not loaded"),
+            "instant text": self.cfg.get("instant_text_engine", "off"),
             "instant text model": ("failed" if live.INSTANT.failed else
                                    f"{live.INSTANT.name} ({live.INSTANT.threads} threads)" if live.INSTANT.model
                                    else "not loaded"),
+            "instant text GPU": (f"{gpu.GPU.name}" if gpu.GPU.model else
+                                 f"failed: {gpu.GPU.failed[:80]}" if gpu.GPU.failed else
+                                 "libraries installed" if gpu.libraries_installed() else "not set up"),
             "learning corrections": "off (UI Automation unavailable)" if self.learner.disabled else "available",
             "packages up to date": deps.up_to_date() if deps.in_private_env() else "n/a (not an installed copy)",
             "keyboard hook": (self.hook.error or "ok") if self.hook else "n/a",
@@ -387,7 +414,7 @@ class App:
         self.open_settings(tab)
 
     def ev_open_history(self):
-        self.open_settings(7)
+        self.open_settings("History")
 
     def ev_copy_last(self):
         text = history.last_text()
@@ -483,6 +510,9 @@ class App:
             self.settings.win.lift()
         else:
             self.settings = SettingsWindow(self.root, self)
+        if isinstance(tab, str):  # by name, so adding tabs never breaks it
+            names = [self.settings.nb.tab(t, "text") for t in self.settings.nb.tabs()]
+            tab = names.index(tab) if tab in names else 0
         self.settings.nb.select(tab)
         w = self.settings.win  # bring it to the front even when opened from the tray / Start menu
         w.attributes("-topmost", True)
@@ -598,7 +628,13 @@ class App:
             pcm = audio.boost(pcm)
         screen, draft = self.grab.get(0.6) if self.grab else ("", "")
         self.grab = None
-        raw, engine = stt.transcribe(pcm, cfg, context.hint_names(screen))
+        streamed = ""
+        if live_info and isinstance(live_info[0], instant.DeepgramStreamer):
+            streamed = live_info[0].final_transcript()   # Deepgram already transcribed it while you talked
+        if streamed and not cfg.get("private_mode"):
+            raw, engine = streamed, "deepgram (live)"
+        else:
+            raw, engine = stt.transcribe(pcm, cfg, context.hint_names(screen))
         if stt.is_hallucination(raw, speech_secs):
             raw = ""
         if not raw.strip():
