@@ -1,4 +1,5 @@
-"""Frutiger Aero look: glossy aqua glass, sky gradients, orbs and bubbles - all drawn with Pillow."""
+"""Frutiger Aero look: glossy aqua glass, sky gradients, orbs and bubbles - drawn with Pillow. The Flow bar's
+pieces are drawn once here; FlowBarRenderer.scene() lists them per frame for the graphics card (glbar.py)."""
 import math
 import os
 import random
@@ -506,6 +507,191 @@ class FlowBarRenderer:
                 del self.cache[k]
             self.cache[key] = self._finish(img.reduce(SS))
         return self.cache[key].copy()
+
+
+class Scene:
+    """One Flow bar frame as a list of drawing steps, for the graphics-card renderer (glbar.py).
+
+    base: the still frame (final size), copied as is. patch: (rect, ops) - the moving part, drawn at 2x (SS) in
+    the rect's own coordinates, then shrunk and copied over the still frame at rect / SS. top: steps drawn at final
+    size over everything (caption bubble, words). Steps:
+      ("over", img, x, y, alpha, mask)     blend an image (mask: (L image, x, y) multiplies its alpha, or None)
+      ("paste", img, cov, x, y)            write an image where cov says (how orbs have always been drawn)
+      ("rrect", box, radius, rgba, mode)   rounded rectangle; mode "over" blends, "paste" writes
+      ("circle", cx, cy, r, fill, outline, width, mask)   a bubble, blended
+    Images are Pillow RGBA images that stay alive in the renderer's caches, so the graphics card keeps each one
+    after uploading it once."""
+
+    def __init__(self, size, base, patch=None, top=()):
+        self.size, self.base, self.patch, self.top = size, base, patch, list(top)
+
+
+def _glow_rgba(r, color):
+    key = ("glowrgba", r, color)
+    if key not in _SPRITES:
+        mask, layer, half = _glow_sprite(r, color)
+        im = layer.copy()
+        im.putalpha(mask)
+        _SPRITES[key] = (im, half)
+    return _SPRITES[key]
+
+
+def orb_ops(ops, cx, cy, r, colors, pulse=0.0):
+    """orb(), as drawing steps."""
+    if pulse > 0:
+        im, half = _glow_rgba(r, colors[1])
+        ops.append(("over", im, int(round(cx)) - half, int(round(cy)) - half, pulse, None))
+    sp, cov, pad = _orb_sprite(r, colors)
+    ops.append(("paste", sp, cov, int(round(cx - r)) - pad, int(round(cy - r)) - pad))
+
+
+def _scene(self, state, label="", levels=(), t=0.0, kind="info", caption="", phase=1.0, caption_alpha=1.0):
+    """render(), as a Scene for the graphics card: same pieces, same places, nothing composited here."""
+    if state not in ("recording", "locked", "command", "processing"):
+        # still pictures: render() builds and caches them; hand over the cached image itself (not a copy), so the
+        # graphics card uploads it once
+        self.render(state, label, levels, t, kind, caption, phase, caption_alpha)
+        if state == "hidden":
+            if "hidden_img" not in self.cache:
+                self.cache["hidden_img"] = Image.new("RGBA", self.size, (0, 0, 0, 0))
+            return Scene(self.size, self.cache["hidden_img"])
+        if state == "idle":
+            return Scene(self.size, self.cache["idle_img"])
+        return Scene(self.size, self.cache[("toastimg", label[:64], kind)])
+    dt = 1 / 30 if self.last_t is None else min(max(t - self.last_t, 0.0), 0.1)
+    self.last_t = t
+    self.texts = []
+    ops = []
+    if state == "processing":
+        live = self._live("proc", 100, 36, lambda b: SS * 3, glow=(90, 230, 255))
+        (rx, ry, rx1, ry1), patch_base, patch_over, still, box = live
+        self.frame_box = box
+        x0, y0, x1, y1 = box
+        cy = (y0 + y1) // 2
+        ops.append(("paste", patch_base, None, 0, 0))
+        if ("mask", "proc") not in self.cache:
+            self.cache["mask", "proc"] = capsule_mask(self.big, box, (box[3] - box[1]) // 2).crop(box)
+        self._light_ops(ops, (x1 - x0, y1 - y0), "processing", t, 0.3, (x0 - rx, y0 - ry),
+                        (self.cache["mask", "proc"], x0 - rx, y0 - ry), period=1.4)
+        for i in range(3):
+            ph = t * 6.0 - i * 0.9
+            dy = -abs(math.sin(ph)) * self._u(6)
+            orb_ops(ops, (x0 + x1) // 2 + (i - 1) * self._u(18) - rx, cy + self._u(2) + dy - ry, self._u(5.5),
+                    ((255, 255, 255), (120, 210, 255)))
+        ops.append(("over", patch_over, 0, 0, 1.0, None))
+        return Scene(self.size, still, ((rx, ry, rx1, ry1), ops))
+    wide = state != "recording"
+    w = 258 if wide else 184
+    glow = (170, 120, 255) if state == "command" else (90, 230, 255)
+    orb_r = self._u(9)
+    half = int(orb_r * 3.8)
+    tint = dict(top=VIOLET[0], bottom=VIOLET[1]) if state == "command" else {}
+    live = self._live(("rec", state), w, 42,
+                      lambda b: max(SS * 2, half - self._u(22), half - (b[3] - b[1]) // 2) + SS, glow=glow, **tint)
+    (rx, ry, rx1, ry1), patch_base, patch_over, still, box = live
+    x0, y0, x1, y1 = box
+    cy = (y0 + y1) // 2
+    orb_x = x0 + self._u(22)
+    self.frame_box = box
+    lv = levels[-1] if levels else 0.0
+    self.bubbles.step(box, lv, dt)
+    ops.append(("paste", patch_base, None, 0, 0))
+    mkey = ("mask", state)
+    if mkey not in self.cache:
+        self.cache[mkey] = capsule_mask(self.big, box, (box[3] - box[1]) // 2).crop(box)
+    mask = (self.cache[mkey], x0 - rx, y0 - ry)
+    self._light_ops(ops, (x1 - x0, y1 - y0), state, t, lv, (x0 - rx, y0 - ry), mask)
+    for bx, by, br, _vy, _p in self.bubbles.items:
+        ops.append(("circle", bx - rx, by - ry, br, (255, 255, 255, 35), (255, 255, 255, 170),
+                    max(1, SS // 2 + 1), mask))
+        ops.append(("circle", bx - rx - br * 0.25, by - ry - br * 0.4, br * 0.2, (255, 255, 255, 220), None, 0, mask))
+    pulse = 0.5 + 0.5 * math.sin(t * 6.67)
+    orb_ops(ops, orb_x - rx, cy - ry, orb_r, ORB["command" if state == "command" else "recording"], pulse)
+    self._bar_ops(ops, box, list(levels), phase, (x0 - rx, y0 - ry))
+    if wide:
+        tag = "Command" if state == "command" else "Hands-free"
+        tx = x0 + self._u(42) + BARS * self._u(7) + self._u(6)
+        self._text(tag, self.small, "light", tx, cy, "lm")
+        sx = x1 - self._u(22) - rx
+        orb_ops(ops, sx, cy - ry, self._u(8), ((255, 255, 255), (150, 200, 230)))
+        sq = self._u(3.2)
+        ops.append(("rrect", (sx - sq, cy - ry - sq, sx + sq, cy - ry + sq), SS, (20, 90, 150, 230), "paste"))
+    ops.append(("over", patch_over, 0, 0, 1.0, None))
+    top = []
+    if caption and caption_alpha > 0:
+        self._caption_ops(top, caption, y0, min(caption_alpha, 1.0))
+    self._text_ops(top)
+    return Scene(self.size, still, ((rx, ry, rx1, ry1), ops), top)
+
+
+def _light_ops(self, ops, size, state, t, level, at, mask, period=2.4):
+    """_light(), as a drawing step (the light sprite with its brightness as alpha)."""
+    w, h = size
+    key = ("light", state, w, h)
+    if key not in self.cache:
+        self._light(Image.new("RGBA", (w, h), (0, 0, 0, 0)), state, t, level, period)   # builds the sprite
+    sp = self.cache[key]
+    k = min(1.0, 0.4 + 0.75 * level)
+    drift = 0.5 - 0.5 * math.cos(2 * math.pi * t / period)
+    cx = w * (0.18 + 0.56 * drift + 0.06 * level)
+    ops.append(("over", sp, at[0] + int(cx - sp.size[0] / 2), at[1] + int(h * 0.72 - sp.size[1] / 2), k, mask))
+
+
+def _bar_ops(self, ops, box, levels, phase, at):
+    """_bars(), as rounded-rectangle steps."""
+    x0, y0, x1, y1 = box
+    cy = (y1 - y0) / 2
+    slot, half, r = self._u(7), self._u(1.6), self._u(1.6)
+    bx = self._u(42)
+    n = len(levels)
+    for i, v in enumerate(levels):
+        pos = (BARS - 1) - (n - 1 - i) + (1 - phase)
+        if pos >= BARS or pos <= -1:
+            continue
+        a = 1.0 if 0 <= pos <= BARS - 1 else (BARS - pos if pos > BARS - 1 else 1 + pos)
+        hh = self._u(3 + v * 22)
+        x = at[0] + bx + pos * slot
+        top = at[1] + cy - hh / 2
+        ops.append(("rrect", (x - half, top + self._u(1), x + half, top + hh + self._u(1)), r,
+                    (0, 70, 130, int(70 * a)), "over"))
+        ops.append(("rrect", (x - half, top, x + half, top + hh), r, (255, 255, 255, int(245 * a)), "over"))
+
+
+def _caption_ops(self, top, text, above_y, alpha=1.0):
+    """_caption(), as drawing steps at final size."""
+    maxw = (self.W - 40) * self.scale
+    words = (text or "").split()
+    shown = shape_for_display(" ".join(words), self.small)
+    while words and (not shown or self.small.getlength(shown) > maxw):
+        words = words[1:]
+        shown = shape_for_display("\u2026 " + " ".join(words), self.small)
+    if not words or not shown:
+        return
+    tw = self.small.getlength(shown) / self.scale
+    w = min(self.W - 16, int(tw / 32 + 1) * 32 + 24)
+    box, bubble, pos = self._cap_img(w, 24, above_y)
+    top.append(("over", bubble, pos[0], pos[1], alpha, None))
+    self._text(shown, self.small, "dark", (box[0] + box[2]) / 2, (box[1] + box[3]) / 2, "mm", alpha)
+
+
+def _text_ops(self, top):
+    """_finish(), as drawing steps: each line of words is a cached sprite."""
+    for text, font, style, x, y, anchor, alpha in self.texts:
+        key = (text, font.size, style, anchor)
+        if key not in self.text_cache:
+            if len(self.text_cache) > 64:
+                self.text_cache.pop(next(iter(self.text_cache)))
+            self.text_cache[key] = text_sprite(text, font, style, anchor)
+        sp, (dx, dy) = self.text_cache[key]
+        top.append(("over", sp, int(round(x / SS)) + dx, int(round(y / SS)) + dy, alpha, None))
+    self.texts = []
+
+
+FlowBarRenderer.scene = _scene
+FlowBarRenderer._light_ops = _light_ops
+FlowBarRenderer._bar_ops = _bar_ops
+FlowBarRenderer._caption_ops = _caption_ops
+FlowBarRenderer._text_ops = _text_ops
 
 
 def crossfade(a, b, t):

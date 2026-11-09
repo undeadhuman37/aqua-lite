@@ -48,7 +48,7 @@ class App:
         except tk.TclError as e:
             log.info("window icon not set: %s", e)
         self.bar = FlowBar(self.root, lambda: self.recorder.level, self._bar_clicked, self.cfg.get("show_idle_bar", False),
-                           self.cfg.get("frosted_glass", True))
+                           self.cfg.get("frosted_glass", True), self.cfg.get("gpu_flow_bar", True))
         self.live = live.LiveCaption(self.recorder, self.cfg, lambda text: self.post("caption", text))
         self.learner = learn.Learner(lambda words: self.post("learned", words), on_edited=self._edited)
         self.edit_where = ("", "other")   # app + category of the dictation being watched for edits
@@ -75,9 +75,7 @@ class App:
         if IS_WIN:
             winapi.watch_open_requests(lambda: self.post("open_settings"))
         threading.Thread(target=self._worker, daemon=True, name="worker").start()
-        deps.ensure_in_background(lambda ok, _any: self.post(
-            "toast", "New features are set up" if ok else "Couldn't install a package - some features are off",
-            "ok" if ok else "warn", 4))
+        deps.ensure_in_background(self._deps_done)
         self._preload()
         self.root.after(15, self._pump)
         if self.cfg.get("first_run", True):
@@ -105,6 +103,16 @@ class App:
             self.root.after(5000, lambda: self.check_for_updates(manual=False))
 
     # ------------------------------------------------------------------ plumbing
+    def _deps_done(self, ok, _any):   # background thread
+        self.post("toast", "New features are set up" if ok else "Couldn't install a package - some features are off",
+                  "ok" if ok else "warn", 4)
+        if ok:
+            self.post("gpu_bar")   # the graphics-card library may have just arrived: start using it now
+
+    def ev_gpu_bar(self):
+        if self.cfg.get("gpu_flow_bar", True) and self.bar.gl is None:
+            self.bar.set_gpu(True)
+
     def post(self, name, *args):
         self.events.put((name, args))
 
@@ -593,6 +601,8 @@ class App:
         self.bar.show_idle = self.cfg.get("show_idle_bar", False)
         if self.cfg.get("frosted_glass", True) != self.bar.want_frost:
             self.bar.set_frost(self.cfg.get("frosted_glass", True))
+        if self.cfg.get("gpu_flow_bar", True) != (self.bar.gl is not None):
+            self.bar.set_gpu(self.cfg.get("gpu_flow_bar", True))
         self.bar.set_state(self.bar.state if self.bar.state != "toast" else "idle")
         if IS_WIN and old_startup != self.cfg.get("launch_at_startup"):
             winapi.set_startup(self.cfg["launch_at_startup"], os.path.join(HERE, "AquaLite.pyw"), self.icon_path)

@@ -363,6 +363,29 @@ def check_sentence_tidy():
     assert instant.Polisher.span_of(spans, 7, None) == (1.2, None)
 
 
+def check_gpu_bar():
+    """The Flow bar on the graphics card must look like the Pillow drawing. Skipped where there's no OpenGL."""
+    import random
+    from . import aero
+    try:
+        from . import glbar
+        a, b = aero.FlowBarRenderer(1.0), aero.FlowBarRenderer(1.0)
+        gl = glbar.GLBar(b.size)
+    except Exception as e:
+        print(f"  (graphics card drawing not checked here: {str(e)[:60]})")
+        return
+    lv = [0.2, 0.5, 0.8, 0.4, 0.6, 0.3, 0.7, 0.5, 0.9, 0.2, 0.4, 0.6, 0.8, 0.3, 0.5]
+    for st, kw in (("idle", {}), ("recording", dict(levels=lv, t=1.0, caption="hello there", caption_alpha=1.0)),
+                   ("command", dict(levels=lv, t=0.4, phase=0.5)), ("processing", dict(t=0.8)),
+                   ("toast", dict(label="Copied", kind="ok"))):
+        random.seed(5)
+        want = a.render(st, **kw)
+        random.seed(5)
+        diff = glbar.difference(want, glbar.to_image(gl.frame(b.scene(st, **kw)), b.size))
+        assert diff < 3, f"graphics-card Flow bar differs in {st}: {diff:.2f}"
+    gl.close()
+
+
 def check_paste_wait():
     from . import instant
     t = [0.0]
@@ -468,7 +491,7 @@ def main():
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
                      ("learning & screen context", check_learning), ("instant text", check_instant), ("paste waits for the app", check_paste_wait), ("instant text tidies each sentence", check_sentence_tidy), ("edit by voice", check_voice_edit),
-                     ("private mode", check_private_mode), ("new look", check_look),
+                     ("private mode", check_private_mode), ("new look", check_look), ("flow bar on the graphics card", check_gpu_bar),
                      ("problem report", check_report)):
         fn()
         print(f"ok  {name}")

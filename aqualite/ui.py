@@ -797,6 +797,7 @@ class SettingsWindow:
             ("sounds", "Play start/stop sounds"),
             ("show_idle_bar", "Keep the Flow bar on screen when idle (click it to start hands-free)"),
             ("frosted_glass", "Frosted glass Flow bar: see-through, with what's behind it softly blurred"),
+            ("gpu_flow_bar", "Draw the Flow bar on the graphics card (smoother, less processor work)"),
             ("whisper_boost", "Whisper mode (boost quiet speech)")))
         typing = self._card(f, "Typing & Windows")
         self._toggles(typing, (
