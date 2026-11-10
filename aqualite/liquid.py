@@ -22,24 +22,26 @@ PALETTES = {
         solid_body=((242, 245, 250), (228, 233, 241)),           # no blur behind: looks like frosted glass
         core=(255, 255, 255, 140),        # frosted middle under the words and waveform, so they read over anything
         edge=(255, 255, 255, 26),         # slightly brighter band along the inside of the rim: thick glass
-        rim=178, shine=46, shadow=26, fringe=30,
+        rim=178, shine=46, shadow=26, fringe=0,
         ink=(20, 22, 28), halo=(255, 255, 255, 200),
         bar=(30, 34, 42), bar_shade=(255, 255, 255, 110),
         light=(255, 255, 255), light_a=70,
         tint={"recording": (80, 200, 60), "locked": (80, 200, 60), "command": (140, 80, 230)}, tint_a=31,
         frost_tint=0x18FFFFFF,            # AABBGGRR: an almost clear wash in Windows' blur
+        acrylic_tint=0x01A4A4A4,          # Windows 11 acrylic: a little brighter than what's behind
     ),
     "dark": dict(
         frost_body=((40, 42, 50, 70), (40, 42, 50, 52)),
         solid_body=((44, 47, 56), (30, 32, 39)),
         core=(20, 22, 28, 153),
         edge=(255, 255, 255, 15),
-        rim=125, shine=30, shadow=34, fringe=46,
+        rim=125, shine=30, shadow=34, fringe=0,
         ink=(245, 247, 250), halo=(0, 0, 0, 190),
         bar=(255, 255, 255), bar_shade=(0, 0, 0, 90),
         light=(200, 225, 255), light_a=50,
         tint={"recording": (110, 230, 90), "locked": (110, 230, 90), "command": (170, 120, 255)}, tint_a=38,
         frost_tint=0x14201C1A,
+        acrylic_tint=0x01605854,          # a little darker than what's behind
     ),
 }
 LISTENING = ("recording", "locked", "command")
@@ -283,6 +285,11 @@ class LiquidBarRenderer:
     def frost_tint(self):
         """The wash Windows mixes into its blur behind the bar (winapi.Frost)."""
         return self.pal["frost_tint"]
+
+    @property
+    def acrylic_tint(self):
+        """The same for Windows 11's acrylic blur (its tint sets brightness: grey leaves it as it is)."""
+        return self.pal["acrylic_tint"]
 
     def _u(self, v):
         return int(v * self.scale * SS)

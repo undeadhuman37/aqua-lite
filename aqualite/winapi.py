@@ -956,8 +956,18 @@ class Frost:
     to blur whatever is behind it. Windows' compositor does the blur on the graphics card, so it costs Aqua Lite
     nothing per frame; the bar's own see-through glass, light and waveform are drawn on top."""
     TINT = 0x30C87812   # AABBGGRR: a faint sky-blue wash in the blur (Frutiger Aero)
+    # Windows 11 draws the older blur-behind as solid black, so there the acrylic blur is used. Its tint works as a
+    # brightness: grey 0x808080 leaves the blur as it is, lighter brightens it, darker dims it (alpha barely matters).
+    ACRYLIC_TINT = 0x01E6C8A0   # a light sky-blue lift (Frutiger Aero)
 
-    def __init__(self, tint=None):
+    @staticmethod
+    def acrylic():
+        try:
+            return sys.getwindowsversion().build >= 22000
+        except AttributeError:
+            return False
+
+    def __init__(self, tint=None, acrylic_tint=None):
         global _frost_class
         if _SetWCA is None:
             raise OSError("this Windows has no blur-behind")
@@ -976,7 +986,10 @@ class Frost:
                                            None, None, inst, None)
         if not self.hwnd:
             raise OSError(ctypes.get_last_error(), "CreateWindowEx failed")
-        policy = _ACCENT_POLICY(3, 2, self.TINT if tint is None else tint, 0)   # ACCENT_ENABLE_BLURBEHIND, tinted
+        if self.acrylic():   # ACCENT_ENABLE_ACRYLICBLURBEHIND
+            policy = _ACCENT_POLICY(4, 2, self.ACRYLIC_TINT if acrylic_tint is None else acrylic_tint, 0)
+        else:                # ACCENT_ENABLE_BLURBEHIND, tinted
+            policy = _ACCENT_POLICY(3, 2, self.TINT if tint is None else tint, 0)
         data = _WINCOMPATTRDATA(19, ctypes.addressof(policy), ctypes.sizeof(policy))
         if not _SetWCA(self.hwnd, ctypes.byref(data)):
             user32.DestroyWindow(self.hwnd)

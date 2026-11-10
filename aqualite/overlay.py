@@ -143,7 +143,8 @@ class FlowBar:
             from . import winapi
             try:
                 if winapi.transparency_on():
-                    self.frost = winapi.Frost(getattr(self.r, "frost_tint", None))
+                    self.frost = winapi.Frost(getattr(self.r, "frost_tint", None),
+                                              getattr(self.r, "acrylic_tint", None))
             except Exception:
                 self.frost = None
         elif not on and self.frost is not None:
