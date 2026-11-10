@@ -1,0 +1,7 @@
+# macOS: everything in requirements.txt plus PyObjC, which lets Aqua Lite talk to macOS
+# (keyboard shortcut, typing and pasting, reading the text box, the Flow bar window). See docs/MAC.md.
+-r requirements.txt
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices>=10.0; sys_platform == "darwin"
+pyobjc-framework-AVFoundation>=10.0; sys_platform == "darwin"

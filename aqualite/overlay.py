@@ -2,17 +2,17 @@
 import collections
 import logging
 import math
-import sys
 import time
 import tkinter as tk
 
 from PIL import Image
 
+from . import osapi
 from .aero import BARS, FlowBarRenderer, crossfade, premultiplied_bgra
 
 log = logging.getLogger("aqualite")
 
-IS_WIN = sys.platform == "win32"
+IS_WIN = osapi.IS_WIN
 LISTENING = ("recording", "locked", "command")
 ANIMATED = LISTENING + ("processing",)
 SHOW_SECS, HIDE_SECS = 0.30, 0.22   # slide up from / down under the bottom edge of the screen
@@ -90,11 +90,11 @@ class FlowBar:
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
         self.hwnd, self.layered, scale = None, False, 1.0
-        if IS_WIN:
-            from . import winapi
+        self.ov = None        # the see-through window (osapi.Overlay) showing each frame
+        self.tk_alpha = False  # macOS without PyObjC: Tk's own see-through window shows the frames instead
+        if osapi.SUPPORTED:
             self.win.update_idletasks()
-            self.hwnd = winapi.user32.GetParent(self.win.winfo_id()) or self.win.winfo_id()
-            scale = winapi.window_dpi_scale(self.hwnd)
+            scale = osapi.dpi_scale(self.win)
         self.scale = scale
         self.r = make_renderer(look, scale, look_mode)
         self.w, self.h = self.r.size
@@ -103,16 +103,23 @@ class FlowBar:
         self.c.pack()
         self.c.bind("<Button-1>", self._clicked)
         self.photo = None
-        if IS_WIN:
-            from . import winapi
-            winapi.make_layered(self.hwnd)
-            self.layered = winapi.update_layered(self.hwnd, -20000, -20000, self.w, self.h,
-                                                 premultiplied_bgra(self.r.render("hidden")))
-            if not self.layered:  # fallback: colour-key transparency
-                ex = winapi.user32.GetWindowLongPtrW(self.hwnd, -20)
-                winapi.user32.SetWindowLongPtrW(self.hwnd, -20, ex & ~0x00080000)
-                self.win.attributes("-transparentcolor", "#ff00fe")
-                winapi.make_overlay_window(self.win)
+        if osapi.SUPPORTED and osapi.Overlay is not None:
+            try:
+                self.ov = osapi.Overlay(self.win, self.w, self.h, premultiplied_bgra(self.r.render("hidden")),
+                                        on_click=lambda: self.root.after(0, self._clicked))
+                self.hwnd, self.layered = self.ov.handle, self.ov.ok   # not ok: colour-key fallback (Windows)
+            except Exception as e:
+                log.warning("flow bar: see-through window unavailable, using a plain one: %s", e)
+                self.ov = None
+        if osapi.IS_MAC and not self.layered:
+            try:   # Tk on a Mac can show a see-through window with soft edges by itself
+                self.win.deiconify()
+                self.win.attributes("-transparent", True)
+                self.win.configure(bg="systemTransparent")
+                self.c.configure(bg="systemTransparent")
+                self.tk_alpha = True
+            except tk.TclError as e:
+                log.info("flow bar: no see-through Tk window: %s", e)
         self.set_frost(frost)
         self.set_gpu(gpu)
         self._loop()
@@ -139,11 +146,10 @@ class FlowBar:
         """Frosted glass: Windows blurs what's behind the bar and the glass turns see-through. Falls back to solid
         glass when Windows can't (older Windows, or Transparency effects switched off)."""
         self.want_frost = on
-        if on and self.frost is None and IS_WIN and self.layered:
-            from . import winapi
+        if on and self.frost is None and osapi.Frost is not None and self.layered:
             try:
-                if winapi.transparency_on() and winapi.Frost.shapes_ok():
-                    self.frost = winapi.Frost(getattr(self.r, "frost_tint", None))
+                if osapi.frost_available():
+                    self.frost = osapi.Frost(getattr(self.r, "frost_tint", None))
             except Exception:
                 self.frost = None
         elif not on and self.frost is not None:
@@ -179,10 +185,9 @@ class FlowBar:
         """Springs and shape-morphing (Liquid Glass) only while the graphics card draws, and only if Windows'
         animation effects are on; otherwise state changes cross-fade."""
         on = self.gl is not None
-        if on and IS_WIN:
+        if on and osapi.SUPPORTED:
             try:
-                from . import winapi
-                on = winapi.animations_on()
+                on = osapi.animations_on()
             except Exception:
                 pass
         if hasattr(self.r, "animate"):
@@ -241,9 +246,8 @@ class FlowBar:
         self.mode_checked = time.perf_counter()
         if self.look == "liquid" and self.look_mode == "system":
             self.set_look(self.look, self.look_mode)
-        if self.want_frost and IS_WIN and self.layered:
-            from . import winapi
-            want = winapi.transparency_on() and winapi.Frost.shapes_ok()
+        if self.want_frost and osapi.Frost is not None and self.layered:
+            want = osapi.frost_available()
             if want != (self.frost is not None):   # switched on or off: rebuild the blur
                 if self.frost is not None:
                     self.frost.close()
@@ -317,10 +321,9 @@ class FlowBar:
         if now - self.timing_at < 1.0:
             return
         self.timing_at = now
-        if IS_WIN:
-            from . import winapi
+        if osapi.SUPPORTED:
             try:
-                period, self.vblank = winapi.display_timing()
+                period, self.vblank = osapi.display_timing()
             except Exception:
                 period, self.vblank = FRAME, None
         else:
@@ -349,9 +352,8 @@ class FlowBar:
         else:
             delay = REST_POLL
             self.timing_at = -10.0
-        if IS_WIN and active != self.was_active:
-            from . import winapi
-            winapi.fine_timer(active)
+        if osapi.SUPPORTED and active != self.was_active:
+            osapi.fine_timer(active)
         self.was_active = active
         self.job = self.root.after(max(1, int(delay * 1000)), self._loop)
 
@@ -451,17 +453,19 @@ class FlowBar:
         if keep:
             self.last_keep = now
         if self.layered:
-            from . import winapi
-            if winapi.user32.IsIconic(self.hwnd):  # something minimized us (e.g. Win+D): come back quietly
-                winapi.user32.ShowWindow(self.hwnd, 4)
-            winapi.update_layered(self.hwnd, x, y, self.w, self.h, data if data is not None else premultiplied_bgra(img))
-            if keep:
-                winapi.user32.SetWindowPos(self.hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+            self.ov.show(x, y, data if data is not None else premultiplied_bgra(img), restack=keep,
+                         clickable=self._visible() or self.shown > 0)
             if self.frost is not None:
                 self._place_frost(x, y + offset, y + self.h, keep)
             return
         # fallback / non-Windows: composite over the key colour (hard edges) and show in the canvas
         from PIL import ImageTk
+        if self.tk_alpha:   # the window itself is see-through: show the picture with its soft edges
+            self.photo = ImageTk.PhotoImage(img)
+            self.c.delete("all")
+            self.c.create_image(0, 0, image=self.photo, anchor="nw")
+            self.win.geometry(f"+{x}+{y}")
+            return
         bg = Image.new("RGBA", img.size, (255, 0, 254, 255) if IS_WIN else (32, 44, 60, 255))
         a = img.getchannel("A").point(lambda v: 255 if v > 110 else 0) if IS_WIN else img.getchannel("A")
         bg.paste(img.convert("RGB"), (0, 0), a)
@@ -537,9 +541,10 @@ class FlowBar:
             self.dirty = True
 
     def _position(self):
-        if IS_WIN:
-            from . import winapi
-            l, _t, r, b = winapi.work_area_at_cursor()
-        else:
+        try:
+            if not (osapi.SUPPORTED and (self.layered or IS_WIN)):
+                raise OSError("Tk positions this window")
+            l, _t, r, b = osapi.work_area_at_cursor()   # Windows: pixels; Mac: the bar window's pixels
+        except Exception:
             l, r, b = 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         return (l + r) // 2 - self.w // 2, b - self.h

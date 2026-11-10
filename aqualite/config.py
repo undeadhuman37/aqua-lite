@@ -1,7 +1,9 @@
-"""Settings: defaults, load/save. Stored in %APPDATA%\\AquaLite\\config.json."""
+"""Settings: defaults, load/save. Stored in %APPDATA%\\AquaLite\\config.json (on a Mac in
+~/Library/Application Support/AquaLite/config.json)."""
 import copy
 import json
 import os
+import sys
 import threading
 
 APP_NAME = "Aqua Lite"
@@ -70,7 +72,10 @@ def whats_new_full(version):
 
 
 def data_dir():
-    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
+    if sys.platform == "darwin":
+        base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+    else:
+        base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
     d = os.path.join(base, "AquaLite")
     old = os.path.join(base, "Flowlite")  # the app's previous name: carry settings and history over
     if not os.path.exists(d) and os.path.isdir(old):
@@ -170,6 +175,19 @@ DEFAULTS = {
     "first_run": True,
     "settings_version": 2,
 }
+
+# A Mac keyboard: hold Fn (the globe key) to talk, as Wispr Flow does on a Mac. Command is the Win key and Option
+# is Alt for hotkeys.py; Ctrl+Option works too for keyboards without Fn (type "ctrl+option").
+MAC_DEFAULTS = {
+    "hotkey_ptt": "fn",
+    "hotkey_handsfree_key": "space",
+    "hotkey_command_key": "cmd",         # not part of fn or ctrl+option, so it never clashes with them
+    "hotkey_paste_last": "ctrl+cmd+v",
+    "hotkey_undo_last": "ctrl+cmd+x",
+    "context_blocked_apps": DEFAULTS["context_blocked_apps"] + ["keychain access", "passwords"],
+}
+if sys.platform == "darwin":
+    DEFAULTS.update(MAC_DEFAULTS)
 
 _lock = threading.Lock()
 

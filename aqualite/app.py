@@ -8,12 +8,10 @@ import time
 import tkinter as tk
 
 from . import (audio, config, context, deps, edits, gpu, history, hotkeys, instant, learn, live, llm, localai, memory,
-               music, report, sounds, stt, textproc, updater)
+               music, osapi, report, sounds, stt, textproc, updater)
 from .overlay import FlowBar
 
-IS_WIN = sys.platform == "win32"
-if IS_WIN:
-    from . import winapi
+ON = osapi.SUPPORTED   # this system lets us type into other apps (Windows, macOS)
 
 log = logging.getLogger("aqualite")
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,12 +34,12 @@ class App:
         self.icon_path = os.path.join(HERE, "assets", "aqualite.ico")
 
         gpu.prepare()   # NVIDIA's libraries (if installed for instant text) must be findable before CUDA starts
-        if IS_WIN:
-            winapi.set_app_id()   # our own taskbar identity, so Windows shows our logo instead of Python's
-            winapi.set_dpi_aware()
-            self.cfg["launch_at_startup"] = os.path.exists(winapi.startup_shortcut_path())
+        if ON:
+            osapi.prepare_process()   # Windows: our own taskbar identity and logo, sharp on high-DPI screens
+            self.cfg["launch_at_startup"] = osapi.startup_enabled()
         self.root = tk.Tk()
         self.root.withdraw()
+        osapi.tk_ready(self.root)   # macOS: no Dock icon (the app lives in the menu bar)
         self.root.title("Aqua Lite")
         try:  # every window we open (Settings, History, dialogs) gets the Aqua Lite logo
             self.root.iconbitmap(default=self.icon_path)
@@ -66,16 +64,17 @@ class App:
             log.warning("tray unavailable: %s", e)
 
         self.hook = None
-        if IS_WIN:
-            self.hook = winapi.KeyboardHook(self._on_key)
+        if ON:
+            self.hook = osapi.KeyboardHook(self._on_key)
             self.hook.start()
             self.hook.ok.wait(3)
             if self.hook.error:
                 log.error(self.hook.error)
 
-        if IS_WIN:
-            winapi.watch_open_requests(lambda: self.post("open_settings"))
-            winapi.watch_theme(lambda: self.post("windows_colours"))
+        if ON:
+            osapi.watch_open_requests(lambda: self.post("open_settings"))
+            osapi.watch_theme(lambda: self.post("windows_colours"))
+            self.root.after(1200, self._check_permissions)
         threading.Thread(target=self._worker, daemon=True, name="worker").start()
         deps.ensure_in_background(self._deps_done)
         self._preload()
@@ -121,6 +120,19 @@ class App:
     def post(self, name, *args):
         self.events.put((name, args))
 
+    def _check_permissions(self):
+        """macOS: say in plain words which permissions are still missing, with a button to each setting.
+        Windows needs none, so this does nothing there."""
+        try:
+            problems = osapi.permission_problems()
+        except Exception as e:
+            log.info("permissions: couldn't check: %s", e)
+            return
+        if problems:
+            log.warning("permissions missing: %s", ", ".join(p[0] for p in problems))
+            from . import permissions
+            permissions.show(self.root, problems, osapi.open_permission_settings)
+
     def ev_windows_colours(self):
         """Windows switched light/dark or transparency: the Flow bar follows now; an open Settings window set to
         Match Windows is rebuilt in the new colours. Several changes in a row are handled once."""
@@ -143,8 +155,8 @@ class App:
         return swallowed
 
     def _on_hotkey(self, name, command):  # runs on the hook thread: must be quick
-        if name == "mask" and IS_WIN:
-            threading.Thread(target=winapi.send_mask, daemon=True).start()
+        if name == "mask" and ON:
+            threading.Thread(target=osapi.send_mask, daemon=True).start()
             return
         self.events.put(("hk_" + name, (command,)))
 
@@ -217,10 +229,10 @@ class App:
         if llm.resolve_provider(self.cfg) == "local" and not localai.running():
             # the private AI was freed while idle: start it now, so it's ready by the time you finish talking
             threading.Thread(target=self._warm_local_ai, daemon=True, name="local-ai").start()
-        if IS_WIN and self.cfg.get("screen_context", False):
+        if ON and self.cfg.get("screen_context", False):
             try:
-                proc, title, _pid = winapi.foreground()
-                self.grab = context.grab(winapi.user32.GetForegroundWindow(), proc, title, self.cfg)
+                proc, title, _pid = osapi.foreground()
+                self.grab = context.grab(osapi.foreground_window(), proc, title, self.cfg)
             except Exception as e:
                 log.info("context: not started: %s", e)
         self.bar.set_state("command" if command else "recording")
@@ -246,7 +258,7 @@ class App:
         engine = cfg.get("instant_text_engine", "off")
         if engine == "deepgram" and cfg.get("private_mode"):
             engine = "preview"   # private mode: your voice never leaves this PC, so the on-PC engine types instead
-        if not IS_WIN or engine not in ("preview", "gpu", "deepgram"):
+        if not ON or engine not in ("preview", "gpu", "deepgram"):
             return
         model = None
         if engine == "preview":
@@ -266,31 +278,33 @@ class App:
         elif not cfg.get("deepgram_api_key"):
             return
         try:
-            proc, title, pid = winapi.foreground()
-            hwnd = winapi.user32.GetForegroundWindow()
+            proc, title, pid = osapi.foreground()
+            hwnd = osapi.foreground_window()
             p = proc.lower()
             if (textproc.app_category(proc, title) == "code" or p in textproc.TERMINALS
                     or p in context.ALWAYS_BLOCKED or p in {a.lower() for a in cfg.get("instant_text_skip_apps", [])}):
                 return  # editors auto-complete and auto-close brackets while you type: insert at the end there
-            if winapi.process_elevated(pid) and not winapi.self_elevated():
+            if osapi.process_elevated(pid) and not osapi.self_elevated():
                 return  # Windows blocks typing into admin windows
         except Exception as e:
             log.info("instant text: not started: %s", e)
             return
 
         def before_first():  # Ctrl+Win may still be held: let Windows think they're up, or letters become shortcuts
+            if not osapi.CAN_RELEASE_KEYS:
+                return   # macOS: typed keys carry no modifiers of their own, nothing to release
             held = self.machine.release_held()
             if held:
-                winapi.release_keys(sorted(held))
+                osapi.release_keys(sorted(held))
                 time.sleep(0.03)
 
         def type_here(text):  # only ever into the window the dictation started in
-            return winapi.user32.GetForegroundWindow() == hwnd and winapi.type_text(text)
+            return osapi.foreground_window() == hwnd and osapi.type_text(text)
 
         def backspace_here(n):
-            if winapi.user32.GetForegroundWindow() != hwnd:
+            if osapi.foreground_window() != hwnd:
                 return False
-            winapi.tap_key("backspace", n)
+            osapi.tap_key("backspace", n)
             return True
 
         def box_ends_with(text):  # True / False, or None if this box can't be read
@@ -385,8 +399,8 @@ class App:
         if not typed:
             return None
         cfg = self.cfg
-        winapi.wait_modifiers_released()
-        if winapi.user32.GetForegroundWindow() != hwnd:
+        osapi.wait_modifiers_released()
+        if osapi.foreground_window() != hwnd:
             ok = False
             log.info("instant text: window changed, not touching it")
         else:
@@ -396,20 +410,21 @@ class App:
                 log.info("instant text: live text changed (readable=%s), not touching it", before is not None)
         if not ok:
             if final.strip():
-                winapi.set_text(final, private=True)
-                self.post("toast", "Your live words were changed - polished text copied, press Ctrl+V", "warn", 5)
+                osapi.set_text(final, private=True)
+                self.post("toast", f"Your live words were changed - polished text copied, press {osapi.PASTE_KEYS}",
+                          "warn", 5)
             return {"proc": proc, "keys": "none", "status": "kept"}
         n = instant.presses(typed)
-        winapi.select_left(n)
+        osapi.select_left(n)
         time.sleep(0.03)
         # a long paragraph is hundreds of Shift+Left presses: wait until the app has selected the live words
         caught_up = instant.wait_selected(typed, timeout=min(10.0, 0.3 + 0.01 * n))
         if caught_up is not True:
             log.info("instant text: selection after %d presses: %s", n, caught_up)
         if final.strip():   # unless the selection matched, keep the clipboard a good while longer
-            res = winapi.paste(final, cfg, target=target, saved=saved, queued=0 if caught_up is True else n)
+            res = osapi.paste(final, cfg, target=target, saved=saved, queued=0 if caught_up is True else n)
         else:
-            winapi.tap_key("delete")
+            osapi.tap_key("delete")
             res = {"proc": proc, "keys": "delete", "status": "ok"}
         res["live"] = True
         log.info("instant text: swapped %d live chars for %d polished", len(typed), len(final))
@@ -498,9 +513,9 @@ class App:
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
-        if IS_WIN:
+        if ON:
             try:
-                os.startfile(path)
+                osapi.open_path(path)
             except OSError:
                 pass
         self.bar.toast("Problem report copied - paste it into your message", "ok", 6)
@@ -557,7 +572,8 @@ class App:
             return
         if not updater.can_self_update():
             if manual:
-                self.bar.toast("Updates only work on an installed copy (run install.bat)", "warn", 5)
+                script = "install-mac.sh" if osapi.IS_MAC else "install.bat"
+                self.bar.toast(f"Updates only work on an installed copy (run {script})", "warn", 5)
             return
         self.updating = True
         if manual:
@@ -605,6 +621,7 @@ class App:
             self.settings.win.lift()
         else:
             self.settings = SettingsWindow(self.root, self)
+        osapi.activate_app()   # macOS: a menu bar app's window must ask to come in front
         self.settings.show(tab)   # a page number or name; old tab names still work
         w = self.settings.win  # bring it to the front even when opened from the tray / Start menu
         w.attributes("-topmost", True)
@@ -624,8 +641,8 @@ class App:
         if self.cfg.get("gpu_flow_bar", True) != (self.bar.gl is not None):
             self.bar.set_gpu(self.cfg.get("gpu_flow_bar", True))
         self.bar.set_state(self.bar.state if self.bar.state != "toast" else "idle")
-        if IS_WIN and old_startup != self.cfg.get("launch_at_startup"):
-            winapi.set_startup(self.cfg["launch_at_startup"], os.path.join(HERE, "AquaLite.pyw"), self.icon_path)
+        if ON and old_startup != self.cfg.get("launch_at_startup"):
+            osapi.set_startup(self.cfg["launch_at_startup"], os.path.join(HERE, "AquaLite.pyw"), self.icon_path)
         self._preload()
 
     def _music(self, on):
@@ -651,14 +668,14 @@ class App:
                     self._dictate(*job[1:])
                 elif job[0] == "paste_last":
                     text = history.last_text()
-                    if text and IS_WIN:
-                        winapi.paste(text, self.cfg)
+                    if text and ON:
+                        osapi.paste(text, self.cfg)
                     elif not text:
                         self.post("toast", "Nothing dictated yet", "warn")
                 elif job[0] == "undo_last":
                     self._undo_last()
                 elif job[0] == "discard_live":
-                    if IS_WIN:
+                    if ON:
                         self._swap_live(job[1], "")
             except stt.STTError as e:
                 log.error("stt: %s", e)
@@ -680,30 +697,30 @@ class App:
         if li["sent"]:
             self.post("toast", "That message was already sent - can't undo it", "warn")
             return
-        proc, _title, pid = winapi.foreground() if IS_WIN else ("demo", "", 0)
+        proc, _title, pid = osapi.foreground() if ON else ("demo", "", 0)
         if pid != li["pid"]:
             self.post("toast", f"Go back to {li['proc']} to undo the last dictation", "warn")
             return
         self.learner.stop()
         how = None
-        if IS_WIN and li.get("live"):
+        if ON and li.get("live"):
             # it replaced live words, so Ctrl+Z would bring those back: select exactly what was pasted instead
-            winapi.wait_modifiers_released()
+            osapi.wait_modifiers_released()
             text = li["text"].replace("\r\n", "\n")
             before, exact = instant.text_before_caret(len(text))
             if before is not None and instant.safe_to_replace(text, before, exact, False):
-                winapi.select_left(instant.presses(text))
-                winapi.tap_key("delete")
+                osapi.select_left(instant.presses(text))
+                osapi.tap_key("delete")
                 how = "select+delete"
         if how is None:
-            how = winapi.undo_insert(li["text"], li["proc"]) if IS_WIN else "demo"
+            how = osapi.undo_insert(li["text"], li["proc"]) if ON else "demo"
         self.last_insert = None
         log.info("undo last dictation (%s)", how)
         self.post("toast", "Removed the last dictation", "ok")
 
     def _context(self):
-        if IS_WIN:
-            proc, title, pid = winapi.foreground()
+        if ON:
+            proc, title, pid = osapi.foreground()
         else:
             proc, title, pid = "demo", "", 0
         return {"app": proc, "title": title, "pid": pid, "category": textproc.app_category(proc, title)}, (proc, title, pid)
@@ -712,8 +729,8 @@ class App:
         cfg = self.cfg
         t0 = time.perf_counter()
         seconds = len(pcm) / audio.RATE
-        if live_info and (mode == "command" or not IS_WIN):
-            if IS_WIN:
+        if live_info and (mode == "command" or not ON):
+            if ON:
                 self._swap_live(live_info, "")
             live_info = None
         if speech_secs < 0.12:
@@ -721,7 +738,7 @@ class App:
                 self._swap_live(live_info, "")
             self.post("toast", "Didn't catch that - no speech heard", "warn")
             return
-        if (live_info and mode == "dictation" and IS_WIN and live_info[0].polisher is not None
+        if (live_info and mode == "dictation" and ON and live_info[0].polisher is not None
                 and live_info[0].fixing and not cfg.get("instant_text_recheck", False)):
             if self._quick_finish(pcm, speech_secs, seconds, t0, live_info):
                 return
@@ -752,8 +769,8 @@ class App:
             if enter and not raw.strip():  # just "press enter"
                 if live_info:
                     self._swap_live(live_info, "")
-                if IS_WIN:
-                    winapi.press_enter()
+                if ON:
+                    osapi.press_enter()
                 self.post("bar", "idle")
                 return
         ctx, target = self._context()
@@ -770,9 +787,9 @@ class App:
             if not llm.resolve_provider(cfg):
                 self.post("toast", "Command Mode needs an AI key (Settings > Speech & AI)", "warn", 5)
                 return
-            selection, saved = winapi.copy_selection() if IS_WIN else ("", None)
+            selection, saved = osapi.copy_selection() if ON else ("", None)
             final = None
-            if not selection.strip() and IS_WIN and target[0].lower() not in textproc.TERMINALS:
+            if not selection.strip() and ON and target[0].lower() not in textproc.TERMINALS:
                 final = self._voice_edit(raw, ctx, target, saved)   # edit what's already in the box
                 if final is None:  # done: the box was edited in place
                     self.post("bar", "idle")
@@ -785,12 +802,12 @@ class App:
                 final += " "
         latency = time.perf_counter() - t0
         result = {"status": "demo"}
-        swapped = self._swap_live(live_info, final, target, saved) if (live_info and IS_WIN) else None
+        swapped = self._swap_live(live_info, final, target, saved) if (live_info and ON) else None
         if swapped is not None:  # instant text: the live words were replaced with the polished version
             result = swapped
             status = result["status"]
-        elif final.strip() and IS_WIN:
-            result = winapi.paste(final, cfg, target=target, saved=saved)
+        elif final.strip() and ON:
+            result = osapi.paste(final, cfg, target=target, saved=saved)
             status = result["status"]
         self._after_insert(final, result, status, enter, target, ctx, mode, raw, seconds, engine, latency, screen)
 
@@ -819,11 +836,11 @@ class App:
             final += " "
         target = (proc, title, pid)
         ctx = {"app": proc, "title": title, "category": textproc.app_category(proc, title)}
-        winapi.wait_modifiers_released()
-        if winapi.user32.GetForegroundWindow() == hwnd and st.settle(final):
+        osapi.wait_modifiers_released()
+        if osapi.foreground_window() == hwnd and st.settle(final):
             result = {"proc": proc, "keys": "typed", "status": "ok", "live": True}
         else:   # couldn't just finish it in place: select what was typed live and paste (or copy, if unsafe)
-            result = self._swap_live(live_info, final, target) or winapi.paste(final, cfg, target=target)
+            result = self._swap_live(live_info, final, target) or osapi.paste(final, cfg, target=target)
         latency = time.perf_counter() - t0
         self._after_insert(final, result, result["status"], enter, target, ctx, "dictation", raw, seconds,
                            engine, latency, "")
@@ -831,11 +848,11 @@ class App:
 
     def _after_insert(self, final, result, status, enter, target, ctx, mode, raw, seconds, engine, latency, screen):
         cfg = self.cfg
-        if final.strip() and IS_WIN:
+        if final.strip() and ON:
             if status == "ok":
                 if enter:
                     time.sleep(textproc.enter_delay(target[0]))
-                    winapi.press_enter()
+                    osapi.press_enter()
                 self.last_insert = {"text": final, "proc": target[0], "pid": target[2], "time": time.time(),
                                     "sent": enter, "mode": mode, "live": bool(result.get("live"))}
                 if mode == "dictation" and not enter and (cfg.get("learn_corrections", True)
@@ -847,7 +864,7 @@ class App:
         log.info("%s %.1fs audio, %.2fs, %s [%s] -> %s, context %d chars, %d learned edits | text=%r", mode, seconds,
                  latency, engine, ctx["category"], result.get("keys"), len(screen), len(ctx.get("examples") or []), final)
         if status in ("elevated", "blocked"):
-            self.post("toast", "Can't type into this window - text copied, press Ctrl+V", "warn", 5)
+            self.post("toast", f"Can't type into this window - text copied, press {osapi.PASTE_KEYS}", "warn", 5)
         else:
             self.post("bar", "idle")
 
@@ -882,13 +899,13 @@ class App:
         cfg = self.cfg
 
         class Keys:
-            left = staticmethod(lambda n: winapi.tap_key("left", n))
-            right = staticmethod(lambda n: winapi.tap_key("right", n))
-            select_left = staticmethod(winapi.select_left)
-            put = staticmethod(lambda text: winapi.paste(text, cfg, target=target, saved=saved))
-            delete = staticmethod(lambda: winapi.tap_key("delete"))
+            left = staticmethod(lambda n: osapi.tap_key("left", n))
+            right = staticmethod(lambda n: osapi.tap_key("right", n))
+            select_left = staticmethod(osapi.select_left)
+            put = staticmethod(lambda text: osapi.paste(text, cfg, target=target, saved=saved))
+            delete = staticmethod(lambda: osapi.tap_key("delete"))
 
-        winapi.wait_modifiers_released()
+        osapi.wait_modifiers_released()
         edits.apply(steps, Keys)
         time.sleep(0.1)
         after, _exact = instant.text_before_caret(len(result))
@@ -991,16 +1008,15 @@ def main():
         handlers.append(logging.StreamHandler())
     logging.basicConfig(level=logging.INFO, handlers=handlers, format="%(asctime)s %(levelname)s %(message)s")
     argv = sys.argv[1:]
-    if "--wait-pid" in argv and IS_WIN:  # restarted by the updater: let the old copy exit first
+    if "--wait-pid" in argv and ON:  # restarted by the updater: let the old copy exit first
         try:
-            winapi.wait_for_exit(int(argv[argv.index("--wait-pid") + 1]), 20000)
+            osapi.wait_for_exit(int(argv[argv.index("--wait-pid") + 1]), 20000)
         except (ValueError, IndexError):
             pass
     updated_to = argv[argv.index("--updated") + 1] if "--updated" in argv[:-1] else None
-    if IS_WIN and not winapi.single_instance():
-        if not winapi.ask_running_instance_to_open():
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(None, "Aqua Lite is already running (look for its icon in the tray).",
-                                             "Aqua Lite", 0x40)
+    if ON and not osapi.single_instance():
+        if not osapi.ask_running_instance_to_open():
+            where = "menu bar" if osapi.IS_MAC else "tray"
+            osapi.show_message(f"Aqua Lite is already running (look for its icon in the {where}).", "Aqua Lite")
         return
     App(updated_to).run()

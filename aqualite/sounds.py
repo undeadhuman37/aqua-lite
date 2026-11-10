@@ -42,9 +42,9 @@ def _make():
 
 def play(name):
     try:
-        import winsound
+        from . import osapi
         if not _files:
             _make()
-        winsound.PlaySound(_files[name], winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+        osapi.play_sound(_files[name])
     except Exception:
         pass

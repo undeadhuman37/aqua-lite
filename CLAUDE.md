@@ -22,6 +22,13 @@ glossy sky-blue glass. Python with Tk/ttk and Pillow; the Flow bar can also draw
   before anything is installed or released. Windows-only checks (clipboard, keyboard hook) run only on Windows.
 - `winapi.py` only imports on Windows; test its pure functions by exec'ing them alone or with injected helpers.
 
+## Platform layer (branch `mac-port`)
+
+- All system calls go through `aqualite/osapi/` (`from . import osapi`, then `osapi.paste(...)`): `win.py` wraps
+  `winapi.py` + UI Automation, `mac.py` is PyObjC (never run on a Mac yet: see `docs/MAC.md`), `other.py` does
+  nothing (Linux tests) and lists the interface. Don't call `winapi` from app code; add to all three files instead.
+- `mac.py` imports anywhere (PyObjC is optional there), so the self-test checks its pure parts on Windows too.
+
 ## What 2.0 contains (on `v2`, not released)
 
 1. **Instant text** (`instant.py`): words are typed while you talk (engines: quick processor model `live.py`,

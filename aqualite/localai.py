@@ -23,9 +23,16 @@ import requests
 
 log = logging.getLogger("aqualite")
 IS_WIN = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
 
 RELEASES = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10"
-ENGINES = {"vulkan": "-bin-win-vulkan-x64.zip", "cpu": "-bin-win-cpu-x64.zip"}
+if IS_MAC:   # one Mac build per chip; on Apple silicon it uses the graphics part of the chip (Metal) by itself
+    import platform as _platform
+    _MAC_ZIP = "-bin-macos-arm64.zip" if _platform.machine() == "arm64" else "-bin-macos-x64.zip"
+    ENGINES = {"vulkan": _MAC_ZIP, "cpu": _MAC_ZIP}
+else:
+    ENGINES = {"vulkan": "-bin-win-vulkan-x64.zip", "cpu": "-bin-win-cpu-x64.zip"}
+SERVER_EXE = "llama-server.exe" if not IS_MAC else "llama-server"
 
 # Small open models, all Apache 2.0. Each lists a few GGUF repos to try, newest-trusted first; the exact file is
 # looked up when downloading (the Q4_K_M quantization: the usual balance of size and quality).
@@ -48,7 +55,10 @@ class LocalAIError(Exception):
 
 
 def base_dir():
-    root = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    if IS_MAC:
+        root = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+    else:
+        root = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".local", "share")
     d = os.path.join(root, "AquaLite", "ai")
     os.makedirs(d, exist_ok=True)
     return d
@@ -190,9 +200,14 @@ def install(model_key, progress=None, cancel=None, variant="vulkan"):
             z.extractall(target)
         os.remove(zpath)
         exe = next((os.path.join(dp, f) for dp, _d, fs in os.walk(target) for f in fs
-                    if f.lower() == "llama-server.exe"), None)
+                    if f.lower() == SERVER_EXE), None)
         if not exe:
-            raise LocalAIError("the AI engine download didn't contain llama-server.exe")
+            raise LocalAIError(f"the AI engine download didn't contain {SERVER_EXE}")
+        if not IS_WIN:   # zip files don't keep the "may run" flag
+            for dp, _d, fs in os.walk(os.path.dirname(exe)):
+                for f in fs:
+                    path = os.path.join(dp, f)
+                    os.chmod(path, os.stat(path).st_mode | 0o755)
         st["engines"][variant] = exe
         _save_state(st)
         log.info("private mode: engine %s installed (%s)", variant, name)
@@ -308,12 +323,11 @@ def ensure(model_key, timeout=120):
                     logf.close()
                     errors.append(f"{variant}: {e}")
                     continue
-                if IS_WIN:
-                    try:
-                        from . import winapi
-                        winapi.close_with_us(proc)
-                    except Exception as e:
-                        log.info("private mode: couldn't tie the server to Aqua Lite: %s", e)
+                try:
+                    from . import osapi
+                    osapi.close_with_us(proc)
+                except Exception as e:
+                    log.info("private mode: couldn't tie the server to Aqua Lite: %s", e)
                 t0 = time.time()
                 if _wait_healthy(port, proc, timeout):
                     _server.update(proc=proc, port=port, model=model_key, variant=variant, log=logf)

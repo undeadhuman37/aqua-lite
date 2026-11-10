@@ -3,11 +3,10 @@ Aqua Lite got wrong ('Kaitlin' -> 'Kaitlyn'), that word goes into your dictionar
 If you reword it (punctuation, phrasing, formatting), that before/after pair is kept so the AI can follow your
 preferences next time (see textproc.style_edit and history.add_correction).
 
-Reads the focused text box through Windows UI Automation (the accessibility API screen readers use).
+Reads the focused text box through the accessibility API screen readers use (see osapi).
 Everything stays on this PC. Password boxes are never read.
 """
 import logging
-import sys
 import threading
 import time
 
@@ -18,7 +17,6 @@ WATCH_SECS = 45      # stop watching after this long
 POLL_SECS = 0.5
 STABLE_SECS = 1.5    # a fix only counts once it has stayed put this long (not "Pat" halfway through typing)
 CONTEXT = 40         # characters of surrounding text used to find the dictation again
-UIA_TEXT, UIA_VALUE = 10014, 10002
 
 
 def locate(text, before, after, length):
@@ -101,39 +99,6 @@ class CorrectionWatcher:
         return words
 
 
-# ---------------------------------------------------------------- Windows UI Automation
-def _uia():
-    if not hasattr(sys, "coinit_flags"):
-        sys.coinit_flags = 0  # COINIT_MULTITHREADED: what UI Automation clients should use
-    import comtypes
-    import comtypes.client
-    try:
-        comtypes.CoInitializeEx(0)
-    except OSError:
-        pass
-    comtypes.client.GetModule("UIAutomationCore.dll")
-    from comtypes.gen import UIAutomationClient as U
-    return comtypes, U, comtypes.client.CreateObject(U.CUIAutomation._reg_clsid_, interface=U.IUIAutomation)
-
-
-def make_reader(U, uia):
-    def read():
-        try:
-            el = uia.GetFocusedElement()
-            if not el or el.CurrentIsPassword:
-                return None
-            pat = el.GetCurrentPattern(UIA_TEXT)
-            if pat:
-                return pat.QueryInterface(U.IUIAutomationTextPattern).DocumentRange.GetText(200000).replace("\r\n", "\n")
-            pat = el.GetCurrentPattern(UIA_VALUE)
-            if pat:
-                return (pat.QueryInterface(U.IUIAutomationValuePattern).CurrentValue or "").replace("\r\n", "\n")
-        except Exception as e:
-            log.debug("learn: read failed: %s", e)
-        return None
-    return read
-
-
 class Learner:
     """One watcher at a time; a new dictation (or undo) replaces the previous one."""
 
@@ -146,7 +111,8 @@ class Learner:
         """words: learn misheard words for the dictionary. edits: also report the user's settled edit of the whole
         dictation (to learn their phrasing)."""
         self.stop()
-        if self.disabled or sys.platform != "win32" or not (words or edits):
+        from . import osapi
+        if self.disabled or not osapi.SUPPORTED or not (words or edits):
             return
         threading.Thread(target=self._run, args=(dictated, known, edits, words), daemon=True, name="learn").start()
 
@@ -156,17 +122,18 @@ class Learner:
             self.current = None
 
     def _run(self, dictated, known, edits=False, words=True):
+        from . import osapi
         try:
-            comtypes, U, uia = _uia()
+            reader = osapi.text_reader()
+            read = reader.__enter__()
         except ImportError:
             log.info("learn: comtypes not installed yet")
             return
         except Exception as e:
-            log.warning("learn: UI Automation unavailable: %s", e)
+            log.warning("learn: reading text boxes unavailable: %s", e)
             self.disabled = True
             return
-        from . import winapi
-        w = CorrectionWatcher(dictated, make_reader(U, uia), lambda: winapi.user32.GetForegroundWindow(),
+        w = CorrectionWatcher(dictated, read, osapi.foreground_window,
                               self.on_learned if words else (lambda _w: None), known,
                               on_edited=self.on_edited if edits else None)
         self.current = w
@@ -175,8 +142,7 @@ class Learner:
         except Exception:
             log.exception("learn: watcher failed")
         finally:
-            del uia
             try:
-                comtypes.CoUninitialize()
+                reader.__exit__(None, None, None)
             except Exception:
                 pass
