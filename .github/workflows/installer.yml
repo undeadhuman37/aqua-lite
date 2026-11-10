@@ -31,6 +31,16 @@ jobs:
           python installer/build.py
           echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
 
+      - name: Build the Mac download
+        run: |
+          mkdir -p dist/mac
+          git archive --format=tar --prefix="Aqua Lite/" HEAD | tar -x -C dist/mac
+          cd "dist/mac/Aqua Lite"
+          rm -rf .github .claude installer install.bat uninstall.bat skills-lock.json
+          chmod +x "Install Aqua Lite.command" install-mac.sh uninstall-mac.sh
+          cd ..
+          zip -qry ../AquaLite-Mac.zip "Aqua Lite"
+
       - name: Upload unsigned installer
         id: upload-unsigned
         uses: actions/upload-artifact@v7
@@ -60,6 +70,8 @@ jobs:
           name=$(grep -m1 -E "^## $v( |$)" CHANGELOG.md | sed -E "s/^## $v( - )?//")
           title="Aqua Lite $v${name:+ - $name}"
           awk -v v="$v" 'index($0, "## " v) == 1 && (length($0) == length(v) + 3 || substr($0, length(v) + 4, 1) == " ") {f=1; next} /^## /{f=0} f' CHANGELOG.md > notes.md
-          printf '\n---\n**Install:** download `AquaLite-Setup-%s.exe` below and run it. Already have Aqua Lite? It updates itself.\n\n**Code signing policy:** free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org) - see the [README](https://github.com/undeadhuman37/aqua-lite#code-signing-policy).\n' "$v" >> notes.md
-          gh release create "v$v" "$exe" --title "$title" --notes-file notes.md \
-            || gh release upload "v$v" "$exe" --clobber
+          printf '\n---\n**Windows:** download `AquaLite-Setup-%s.exe` below and run it. Already have Aqua Lite? It updates itself.\n\n**Mac:** download `AquaLite-Mac.zip`, open it and double-click **Install Aqua Lite**. If macOS says it can%s check the app, open System Settings > Privacy & Security and click **Open Anyway**. Or paste this into Terminal: `curl -fsSL https://raw.githubusercontent.com/undeadhuman37/aqua-lite/main/install-mac.sh | bash`\n\n**Code signing policy:** free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org) - see the [README](https://github.com/undeadhuman37/aqua-lite#code-signing-policy).\n' "$v" "'t" >> notes.md
+          cp "$exe" dist/AquaLite-Setup.exe   # fixed names: the README buttons link to releases/latest/download/...
+          gh release create "v$v" "$exe" dist/AquaLite-Setup.exe dist/AquaLite-Mac.zip --title "$title" \
+            --notes-file notes.md \
+            || gh release upload "v$v" "$exe" dist/AquaLite-Setup.exe dist/AquaLite-Mac.zip --clobber

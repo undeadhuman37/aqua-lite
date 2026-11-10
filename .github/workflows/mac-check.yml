@@ -1,0 +1,25 @@
+# Runs the Mac installer on a real Mac (GitHub's macOS runner): installs Python if needed, the packages, the
+# self-test and the app bundle. There's no screen or permission prompts there, so it can't press keys or listen,
+# but it catches everything that breaks before that.
+name: Mac check
+on:
+  push:
+    branches: [main, v2]
+    paths: ["aqualite/**", "install-mac.sh", "requirements*.txt", "AquaLite.pyw", ".github/workflows/mac-check.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  install:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install and self-test
+        env:
+          AQUALITE_CI: "1"
+        run: bash install-mac.sh
+      - name: The app bundle is there
+        run: |
+          test -x "$HOME/Applications/Aqua Lite.app/Contents/MacOS/Aqua Lite"
+          plutil -lint "$HOME/Applications/Aqua Lite.app/Contents/Info.plist"

@@ -10,7 +10,8 @@ from aqualite import aero, skin  # noqa: E402
 
 
 def banner():
-    aero.sky_banner(900, 120, subtitle="Free, open-source voice dictation for Windows").save(os.path.join(HERE, "banner.png"))
+    aero.sky_banner(900, 120, subtitle="Free, open-source voice dictation for Windows and Mac").save(
+        os.path.join(HERE, "banner.png"))
 
 
 def flow_bar():
@@ -36,13 +37,12 @@ def flow_bar():
     bg.save(os.path.join(HERE, "flow-bar.png"))
 
 
-def download_button():
-    """The README's download button: the app's own glossy aqua button, drawn at 2x for sharp screens."""
+def download_button(text="Download for Windows", name="download.png"):
+    """A README download button: the app's own glossy aqua button, drawn at 2x for sharp screens."""
     from PIL import Image, ImageDraw, ImageFilter
     w, h = 600, 120
     img = skin.button(w, h, "normal", primary=True)
     font = aero._font_px(40)
-    text = "Download for Windows"
     tw = font.getlength(text)
     icon = 34
     x = (w - (icon + 22 + tw)) / 2
@@ -60,11 +60,12 @@ def download_button():
     shade.putalpha(words.getchannel("A").point(lambda v: v * 150 // 255).filter(ImageFilter.GaussianBlur(1.5)))
     img.alpha_composite(shade, (0, 2))
     img.alpha_composite(words)
-    img.save(os.path.join(HERE, "download.png"))
+    img.save(os.path.join(HERE, name))
 
 
 if __name__ == "__main__":
     banner()
     flow_bar()
     download_button()
-    print("docs/banner.png, docs/flow-bar.png and docs/download.png updated")
+    download_button("Download for Mac", "download-mac.png")
+    print("docs/banner.png, docs/flow-bar.png, docs/download.png and docs/download-mac.png updated")

@@ -1,11 +1,13 @@
 #!/bin/bash
 # Aqua Lite setup for macOS: copies the app, makes a private Python environment, installs the packages, runs the
-# self-test and puts "Aqua Lite" in your Applications folder. Run it from the folder you downloaded:
-#     bash install-mac.sh
-# UNTESTED: written on Windows without a Mac. See docs/MAC.md for what to try and how to report back.
+# self-test and puts "Aqua Lite" in your Applications folder. Three ways to run it:
+#   - double-click "Install Aqua Lite.command" in the Mac download
+#   - from the downloaded folder:  bash install-mac.sh
+#   - with nothing downloaded:     curl -fsSL https://raw.githubusercontent.com/undeadhuman37/aqua-lite/main/install-mac.sh | bash
+# Running it again updates Aqua Lite. AQUALITE_CI=1 is for the automatic check on GitHub (no window, stricter).
 set -euo pipefail
-cd "$(dirname "$0")"
-SRC="$(pwd)"
+REPO="undeadhuman37/aqua-lite"
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
 
 DEST="$HOME/Library/Application Support/AquaLite"
 APPDIR="$DEST/app"
@@ -18,29 +20,45 @@ echo "    Aqua Lite setup  -  voice dictation for macOS"
 echo "  ================================================"
 echo
 
+# ---- 0. run on its own (curl | bash): fetch the latest Mac download first
+if [ ! -d "$SRC/aqualite" ]; then
+  echo "[0/5] Downloading Aqua Lite..."
+  TMP="$(mktemp -d)"
+  if ! curl -fsSL -o "$TMP/aqualite.zip" "https://github.com/$REPO/releases/latest/download/AquaLite-Mac.zip"; then
+    curl -fsSL -o "$TMP/aqualite.zip" "https://github.com/$REPO/archive/refs/heads/main.zip"
+  fi
+  ditto -x -k "$TMP/aqualite.zip" "$TMP/x"
+  SRC="$(dirname "$(find "$TMP/x" -maxdepth 3 -name AquaLite.pyw | head -1)")"
+fi
+cd "$SRC"
+
 # ---- stop a running copy so files can be replaced
 pkill -f "AquaLite.pyw" 2>/dev/null || true
 
-# ---- 1. find Python 3.11-3.13 with Tk (the python.org installer has both; Homebrew needs python-tk)
-PY=""
+# ---- 1. find Python 3.11-3.13 with Tk (the python.org installer has both); install 3.12 if there's none
 FW=/Library/Frameworks/Python.framework/Versions   # python.org installs here, even before PATH is updated
-for cand in python3.12 python3.13 python3.11 python3 "$FW/3.12/bin/python3" "$FW/3.13/bin/python3" \
-    "$FW/3.11/bin/python3" /opt/homebrew/bin/python3.12 /usr/local/bin/python3.12; do
-  if command -v "$cand" >/dev/null 2>&1 \
-      && "$cand" -c "import sys, tkinter; assert (3, 11) <= sys.version_info[:2] <= (3, 13)" >/dev/null 2>&1; then
-    PY="$(command -v "$cand")"
-    break
-  fi
-done
-if [ -z "$PY" ]; then
-  echo "  Python 3.11, 3.12 or 3.13 with Tk wasn't found."
-  for cand in python3 "$FW"/*/bin/python3; do
-    command -v "$cand" >/dev/null 2>&1 || continue
-    echo "  Found: $cand -> $("$cand" -c 'import sys; print(sys.version.split()[0])' 2>/dev/null)" \
-      "$("$cand" -c 'import tkinter' >/dev/null 2>&1 && echo '(with Tk)' || echo '(no Tk)')"
+find_python() {
+  for cand in "$FW/3.12/bin/python3" python3.12 python3.13 python3.11 python3 "$FW/3.13/bin/python3" \
+      "$FW/3.11/bin/python3" /opt/homebrew/bin/python3.12 /usr/local/bin/python3.12; do
+    if command -v "$cand" >/dev/null 2>&1 \
+        && "$cand" -c "import sys, tkinter; assert (3, 11) <= sys.version_info[:2] <= (3, 13)" >/dev/null 2>&1; then
+      command -v "$cand"
+      return 0
+    fi
   done
-  echo "  Install Python 3.12 from https://www.python.org/downloads/macos/ (it includes Tk), then run this again."
-  echo "  (With Homebrew: brew install python@3.12 python-tk@3.12)"
+  return 1
+}
+PY="$(find_python || true)"
+if [ -z "$PY" ]; then
+  echo "[1/5] Installing Python 3.12 from python.org (Aqua Lite runs on it). macOS asks for your password once."
+  PKG="$(mktemp -d)/python-3.12.10-macos11.pkg"
+  curl -fsSL -o "$PKG" "https://www.python.org/ftp/python/3.12.10/python-3.12.10-macos11.pkg"
+  sudo installer -pkg "$PKG" -target / >/dev/null
+  bash "/Applications/Python 3.12/Install Certificates.command" >/dev/null 2>&1 || true   # so HTTPS works
+  PY="$(find_python || true)"
+fi
+if [ -z "$PY" ]; then
+  echo "  Python 3.12 couldn't be set up. Install it from https://www.python.org/downloads/macos/ and run this again."
   exit 1
 fi
 echo "[1/5] Using Python: $PY"
@@ -68,6 +86,7 @@ fi
 # ---- 4. check everything works
 echo "[4/5] Running the self-test..."
 if ! (cd "$APPDIR" && "$VENV/bin/python" -c "from aqualite import selftest; selftest.main()"); then
+  [ -n "${AQUALITE_CI:-}" ] && exit 1
   # Mac support is new: carry on so the rest can be tried, but this output is exactly what's needed to fix it
   echo
   echo "  The self-test failed (Mac support is new). Setup carries on so you can still try Aqua Lite,"
@@ -129,4 +148,4 @@ echo "  macOS will ask for Accessibility, Input Monitoring and the microphone: a
 echo "  then quit and reopen it. Hold Fn and talk. In System Settings > Keyboard, set"
 echo "  \"Press fn key to\" (or the globe key) to \"Do Nothing\" so the emoji picker doesn't open."
 echo
-open "$BUNDLE" || true
+[ -z "${AQUALITE_CI:-}" ] && open "$BUNDLE" || true

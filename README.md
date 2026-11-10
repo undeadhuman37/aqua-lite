@@ -2,15 +2,17 @@
 
 # Aqua Lite
 
-Free, open-source voice dictation for Windows, in a classic Frutiger Aero look or clear Liquid Glass.
-Hold **Ctrl + Win**, speak, let go: clean, punctuated text appears wherever your cursor is, in WhatsApp, Gmail, Slack, Word, VS Code, ChatGPT or any other app.
+Free, open-source voice dictation for Windows and Mac, in a classic Frutiger Aero look or clear Liquid Glass.
+Hold **Ctrl + Win** (on a Mac, **Fn**), speak, let go: clean, punctuated text appears wherever your cursor is, in WhatsApp, Gmail, Slack, Word, VS Code, ChatGPT or any other app.
 
 <p align="center">
   <a href="https://github.com/undeadhuman37/aqua-lite/releases/latest/download/AquaLite-Setup.exe">
-    <img src="docs/download.png" alt="Download for Windows" width="300">
-  </a>
+    <img src="docs/download.png" alt="Download for Windows" width="300"></a>
+  <a href="https://github.com/undeadhuman37/aqua-lite/releases/latest/download/AquaLite-Mac.zip">
+    <img src="docs/download-mac.png" alt="Download for Mac" width="300"></a>
   <br>
-  <sub>Free for Windows 10 and 11 &middot; <a href="https://github.com/undeadhuman37/aqua-lite/releases/latest">All downloads and release notes</a></sub>
+  <sub>Free for Windows 10 and 11 and macOS 11 or later &middot;
+  <a href="https://github.com/undeadhuman37/aqua-lite/releases/latest">All downloads and release notes</a></sub>
 </p>
 
 Aqua Lite is an independent project inspired by how [Wispr Flow](https://wisprflow.ai) works. It is built from the public
@@ -62,21 +64,23 @@ Aqua Lite updates itself: every time it starts, it checks GitHub for a newer ver
 (you'll see "Updated to ..." at the bottom of the screen). You can also pick **Check for updates** from the tray menu,
 or turn automatic updates off in Settings. Running `install.bat` again also updates. To remove everything, run `uninstall.bat`.
 
-## Install (macOS, preview)
+## Install (macOS 11 or later)
 
-Mac support is new and **hasn't been tried on a Mac yet**. If you have one, testing it helps a lot: the checklist is in
-[docs/MAC.md](docs/MAC.md).
-
-1. Install Python 3.12 from [python.org](https://www.python.org/downloads/macos/) (it includes Tk).
-2. Download this repository, open Terminal in its folder and run `bash install-mac.sh`. It sets up a private environment in
-   `~/Library/Application Support/AquaLite`, runs the self-test and adds **Aqua Lite** to your Applications folder.
-3. Open Aqua Lite. macOS asks for **Accessibility**, **Input Monitoring** and the **microphone**: allow each one, then quit
+1. Download **[AquaLite-Mac.zip](https://github.com/undeadhuman37/aqua-lite/releases/latest/download/AquaLite-Mac.zip)**,
+   open it, and double-click **Install Aqua Lite**. It sets up everything, including Python if you don't have it
+   (macOS asks for your password once for that), and adds **Aqua Lite** to your Applications folder.
+   - If macOS says it can't check the app: open **System Settings > Privacy & Security**, scroll down and click
+     **Open Anyway**. The app isn't notarized by Apple yet.
+   - Or skip the download and paste this into Terminal:
+     `curl -fsSL https://raw.githubusercontent.com/undeadhuman37/aqua-lite/main/install-mac.sh | bash`
+2. Open Aqua Lite. macOS asks for **Accessibility**, **Input Monitoring** and the **microphone**: allow each one, then quit
    and reopen it. Aqua Lite lives in the menu bar.
-4. Hold **Fn** (the globe key) and talk; `Fn + Space` is hands-free and `Fn + Cmd` is Command Mode. Keyboards without Fn
-   can use `ctrl+option` (Settings > Dictation). Set **System Settings > Keyboard > Press fn key to** to **Do Nothing**.
+3. Hold **Fn** (the globe key) and talk.
+   `Fn + Space` is hands-free and `Fn + Cmd` is Command Mode. Keyboards without Fn can use `ctrl+option`
+   (Settings > Dictation). Set **System Settings > Keyboard > Press fn key to** to **Do Nothing**.
 
-The app isn't signed or notarized yet (that needs an Apple Developer account), so it's installed from source rather than
-as a download. To remove it, run `bash uninstall-mac.sh`.
+Aqua Lite updates itself on a Mac too. Mac support is new: if something doesn't work, the checklist in
+[docs/MAC.md](docs/MAC.md) helps, and an issue on GitHub helps even more. To remove it, run `bash uninstall-mac.sh`.
 
 ## Shortcuts
 

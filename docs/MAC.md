@@ -1,7 +1,12 @@
 # Aqua Lite on a Mac
 
-Mac support is written but **has never been run on a Mac**. It was built on Windows without one. This page
-says what's done, what has actually been checked, and what a Mac tester should try.
+Mac support is new in 2.0. It was written on Windows and the owner has since run it on a MacBook; GitHub also runs
+the installer and self-test on a Mac with every change (`.github/workflows/mac-check.yml`). This page says how it
+fits together, which parts have been checked how, and what to try when something misbehaves.
+
+Install: double-click **Install Aqua Lite.command** in `AquaLite-Mac.zip`, or
+`curl -fsSL https://raw.githubusercontent.com/undeadhuman37/aqua-lite/main/install-mac.sh | bash`. The installer sets
+up Python 3.12 from python.org when it's missing.
 
 ## How it fits together
 

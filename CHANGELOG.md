@@ -3,8 +3,11 @@
 Headings are `## <version>` or `## <version> - <update name>`. The first line under each heading is what the app
 shows once after updating (keep it under 52 characters).
 
-## 2.0.0 - Liquid Glass Update
-a new look, words as you talk, and a private mode
+## 2.0.0 - New Generation Update
+now on Mac, with a new look and words as you talk
+- **Now on Mac:** download `AquaLite-Mac.zip` and double-click **Install Aqua Lite**. It sets up everything, Python
+  included, and puts Aqua Lite in your menu bar. Hold Fn (the globe key) and talk. Mac support is brand new, so tell
+  us if anything feels off.
 - **Two looks:** keep the classic Frutiger Aero, or switch to Liquid Glass in Settings > Dictation > Theme. Liquid
   Glass is clear glass with a bright rim, in light, dark or matching Windows, and the preview shows it before you save.
 - **The Flow bar flows:** in Liquid Glass it springs open, melts from shape to shape, breathes while it thinks, and the
