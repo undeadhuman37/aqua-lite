@@ -5,6 +5,14 @@
 Free, open-source voice dictation for Windows, in a classic Frutiger Aero look or clear Liquid Glass.
 Hold **Ctrl + Win**, speak, let go: clean, punctuated text appears wherever your cursor is, in WhatsApp, Gmail, Slack, Word, VS Code, ChatGPT or any other app.
 
+<p align="center">
+  <a href="https://github.com/undeadhuman37/aqua-lite/releases/latest/download/AquaLite-Setup.exe">
+    <img src="docs/download.png" alt="Download for Windows" width="300">
+  </a>
+  <br>
+  <sub>Free for Windows 10 and 11 &middot; <a href="https://github.com/undeadhuman37/aqua-lite/releases/latest">All downloads and release notes</a></sub>
+</p>
+
 Aqua Lite is an independent project inspired by how [Wispr Flow](https://wisprflow.ai) works. It is built from the public
 [wispr-flow-rea-teardown](https://github.com/az9713/wispr-flow-rea-teardown) analysis and contains no Wispr code.
 It is not affiliated with or endorsed by Wispr AI, Inc.
