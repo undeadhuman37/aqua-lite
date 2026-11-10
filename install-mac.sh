@@ -23,7 +23,9 @@ pkill -f "AquaLite.pyw" 2>/dev/null || true
 
 # ---- 1. find Python 3.11-3.13 with Tk (the python.org installer has both; Homebrew needs python-tk)
 PY=""
-for cand in python3.12 python3.13 python3.11 python3; do
+FW=/Library/Frameworks/Python.framework/Versions   # python.org installs here, even before PATH is updated
+for cand in python3.12 python3.13 python3.11 python3 "$FW/3.12/bin/python3" "$FW/3.13/bin/python3" \
+    "$FW/3.11/bin/python3" /opt/homebrew/bin/python3.12 /usr/local/bin/python3.12; do
   if command -v "$cand" >/dev/null 2>&1 \
       && "$cand" -c "import sys, tkinter; assert (3, 11) <= sys.version_info[:2] <= (3, 13)" >/dev/null 2>&1; then
     PY="$(command -v "$cand")"
@@ -32,6 +34,11 @@ for cand in python3.12 python3.13 python3.11 python3; do
 done
 if [ -z "$PY" ]; then
   echo "  Python 3.11, 3.12 or 3.13 with Tk wasn't found."
+  for cand in python3 "$FW"/*/bin/python3; do
+    command -v "$cand" >/dev/null 2>&1 || continue
+    echo "  Found: $cand -> $("$cand" -c 'import sys; print(sys.version.split()[0])' 2>/dev/null)" \
+      "$("$cand" -c 'import tkinter' >/dev/null 2>&1 && echo '(with Tk)' || echo '(no Tk)')"
+  done
   echo "  Install Python 3.12 from https://www.python.org/downloads/macos/ (it includes Tk), then run this again."
   echo "  (With Homebrew: brew install python@3.12 python-tk@3.12)"
   exit 1
