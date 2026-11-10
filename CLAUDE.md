@@ -1,7 +1,7 @@
 # Aqua Lite - notes for Claude Code
 
 Aqua Lite is a free, open-source voice dictation app (a Wispr Flow-style tool) for Windows, with a first macOS port
-on branch `mac-port`. Styled Frutiger Aero: glossy sky-blue glass (optional Liquid Glass theme). Python with Tk/ttk
+(untested on a real Mac). Styled Frutiger Aero: glossy sky-blue glass (optional Liquid Glass theme). Python with Tk/ttk
 and Pillow; the Flow bar can also draw through OpenGL (moderngl).
 
 ## Rules
@@ -62,7 +62,7 @@ Outside `aqualite/`: `install.bat` / `uninstall.bat` and `installer/` (Windows),
 - `winapi.py` only imports on Windows; test its pure functions by exec'ing them alone or with injected helpers.
 - Files are stored with LF, checked out CRLF on Windows (`core.autocrlf`); `*.sh` stay LF (`.gitattributes`).
 
-## Platform layer (`aqualite/osapi/`, branch `mac-port`)
+## Platform layer (`aqualite/osapi/`)
 
 - App code does `from . import osapi` and calls `osapi.paste(...)`, `osapi.foreground()`, `osapi.Overlay(...)`.
   `osapi/__init__.py` picks `win.py`, `mac.py` or `other.py` the first time a name is used, so Windows never loads
@@ -114,4 +114,4 @@ fixed long dictations pasting the user's old clipboard.
   bar morph and the blur behind the caption bubble.
 - `VERSION` is 2.0.0 on `v2` and the CHANGELOG/README entries are written. Release only when the owner approves:
   run the self-test, push to `main`, confirm the installer build.
-- Mac (`mac-port`): needs a Mac tester (`docs/MAC.md`) before it's merged or announced.
+- Mac: needs a Mac tester (`docs/MAC.md`) before it's announced.
