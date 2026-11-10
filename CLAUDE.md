@@ -43,6 +43,16 @@ glossy sky-blue glass. Python with Tk/ttk and Pillow; the Flow bar can also draw
    together on the graphics card (`FlowBarRenderer.scene()` -> `glbar.GLBar`), falling back to Pillow if a test frame
    doesn't match or anything fails.
 
+6. **Liquid Glass theme** (optional; Frutiger Aero stays the default and unchanged): Settings > Dictation > Theme
+   (`look` aero | liquid, `look_mode` system | light | dark). Flow bar: `liquid.LiquidBarRenderer` (springs and
+   shape-morphing drawn by `glbar` LGLASS while moving, cached pictures at rest; Pillow fallback). Settings window:
+   `liquidskin.Skin(mode)` mirrors `skin.py`, `ui.apply_style`/`apply_liquid_style`, a glass sidebar with a gliding
+   bead, sliding switches (styles `Slide0..7.TCheckbutton`), dark title bar, live Flow bar preview. The window is
+   rebuilt when the look changes. `winapi.watch_theme` follows Windows light/dark and transparency without polling.
+   Guide: `.claude/skills/liquid-glass/SKILL.md`.
+7. **What's new page** (Settings and tray): built from the CHANGELOG entry (`config.whats_new_full`); opens by itself
+   once after a major update.
+
 Also on `v2`: the clipboard is restored only after the paste has landed (`winapi._restore_when_pasted`), which fixed
 long dictations pasting the user's old clipboard.
 
@@ -51,6 +61,7 @@ long dictations pasting the user's old clipboard.
 - The owner hasn't yet dictated with private mode switched on (the model download itself works).
 - Confirm on Windows: blur lines up behind the Flow bar, white text readable over white apps, title bar tinted on
   Windows 11, graphics-card Flow bar active (and CPU lower) once `moderngl` has installed itself.
-- Release only when the owner approves: set `VERSION` to 2.0.0, write the CHANGELOG entry (first line 52 characters
-  or fewer), update the README (mention instant text can be a bit jittery and is off by default), run the self-test,
-  push to `main`, confirm the installer build.
+- Confirm on Windows: Liquid Glass Settings in light and dark (title bar, dropdown lists, History table), the Flow
+  bar morph and the blur behind the caption bubble.
+- `VERSION` is 2.0.0 on `v2` and the CHANGELOG/README entries are written. Release only when the owner approves:
+  run the self-test, push to `main`, confirm the installer build.

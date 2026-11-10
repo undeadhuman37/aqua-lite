@@ -400,6 +400,125 @@ def check_gpu_bar():
     gl.close()
 
 
+def _contrast(a, b):
+    """Contrast ratio between two RGB colours, the WCAG way (1 to 21)."""
+    def lum(c):
+        ch = [v / 255 for v in c[:3]]
+        ch = [v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4 for v in ch]
+        return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def check_liquid_look():
+    """Liquid Glass Flow bar: optional (Frutiger Aero stays the default), every state draws, and words and the
+    waveform stay readable over a white and a black screen, in light and dark, frosted or solid."""
+    from PIL import Image
+    from . import aero, config, liquid, overlay
+    assert config.DEFAULTS["look"] == "aero" and config.DEFAULTS["look_mode"] == "system"
+    assert type(overlay.make_renderer("aero", 1.0)) is aero.FlowBarRenderer
+    assert type(overlay.make_renderer("something old", 1.0)) is aero.FlowBarRenderer, "unknown theme must be Aero"
+    assert type(overlay.make_renderer("liquid", 1.0, "dark")) is liquid.LiquidBarRenderer
+    assert liquid.resolve_mode("dark") == "dark" and liquid.resolve_mode("light") == "light"
+    assert liquid.resolve_mode("system") in ("light", "dark")
+    lv = [0.5] * (aero.BARS + 1)
+    for mode in ("light", "dark"):
+        for frost in (False, True):
+            r = liquid.LiquidBarRenderer(1.0, frost=frost, mode=mode)
+            assert r.size == aero.FlowBarRenderer(1.0).size, "both themes must use the same window"
+            for st in ("idle", "recording", "locked", "command", "processing"):
+                im = r.render(st, "", lv, 1.0, caption="hello there")
+                assert im.size == r.size and im.getbbox(), f"Liquid Glass {st} came out empty"
+                x, y, w, h, rad = r.blur_shape()
+                assert 0 <= x and 0 <= y and x + w <= r.size[0] and y + h <= r.size[1] and rad == h // 2
+            assert r.render("toast", "Copied", kind="ok").getbbox()
+            r.render("hidden")
+            assert r.blur_shape() is None
+            box = r._box(258, 42)
+            base, over = r._glass(box, tint=r.pal["tint"]["command"])
+            glass = Image.alpha_composite(base, over)
+            _cbox, bubble, _pos = r._cap_img(120, 24, box[1])
+            spots = [(glass, ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)),
+                     (glass, (box[0] + r._u(150), (box[1] + box[3]) // 2)),
+                     (bubble, (bubble.size[0] // 2, bubble.size[1] // 2))]
+            for under in ((255, 255, 255), (0, 0, 0)):
+                for img, at in spots:
+                    bg = Image.new("RGBA", img.size, under + (255,))
+                    bg.alpha_composite(img)
+                    px = bg.getpixel(at)[:3]
+                    c = _contrast(r.pal["ink"], px)
+                    assert c >= 4.5, f"Liquid Glass {mode} words too faint over {under}: {c:.1f}"
+                    c = _contrast(r.pal["bar"], px)
+                    assert c >= 3, f"Liquid Glass {mode} waveform too faint over {under}: {c:.1f}"
+    r = liquid.LiquidBarRenderer(1.0)
+    r.render("recording", "", lv, 0.0)
+    r.set_mode("dark")
+    assert not r.cache, "switching light/dark must redraw the glass"
+
+
+def check_liquid_settings():
+    """Liquid Glass Settings window: every piece draws in light and dark, text is readable on the page and on cards,
+    the look follows the settings, and Frutiger Aero's colours come back unchanged."""
+    from . import config, liquidskin, skin, ui
+    for mode in ("light", "dark"):
+        k = liquidskin.Skin(mode)
+        for im in (k.button(44, 30, "pressed", True), k.button(44, 30), k.toggle(20, 1), k.toggle(20, 0, "disabled"),
+                   k.toggle_between(20, 0.5), k.radio(18, 1), k.field(40, 28, "focus"), k.arrow(24, 22),
+                   k.progress_trough(120, 16), k.progress_bar(40, 12), k.scale_trough(120, 22), k.slider(22, "pressed"),
+                   k.thumb(12, 48), k.card(48, selected=True), k.nav_pill(200, 38, "selected"), k.icon("star", 18),
+                   k.pill(40, 22, k.PILLS["blue"][0]), k.keycap(28, 24)):
+            assert im.getbbox(), f"a Liquid Glass Settings drawing came out empty ({mode})"
+        side = k.sidebar(224, 600)
+        assert side.size == (224, 600) and side.mode == "RGB"
+        for surface in (k.CARD, k.PAGE):
+            for name, ink, need in (("text", k.INK, 7), ("muted text", k.MUTED, 4.5), ("links and numbers",
+                                                                                        k.ACCENT_TEXT, 4.5),
+                                    ("warnings", k.ui["warn"], 4.5)):
+                c = _contrast(ink, surface)
+                assert c >= need, f"Liquid Glass {mode}: {name} contrast {c:.1f} < {need}"
+        for fill, ink in k.PILLS.values():
+            assert _contrast(fill, ink) >= 4.5, f"Liquid Glass {mode}: a tag is hard to read"
+        side_px = side.getpixel((112, 300))   # the nav text sits on the glass sheet
+        assert _contrast(k.INK, side_px) >= 4.5, f"Liquid Glass {mode}: sidebar text contrast too low"
+    assert ui.look_key({"look": "liquid", "look_mode": "dark"}) == ("liquid", "dark")
+    assert ui.look_key({}) == ("aero", None) and ui.look_key({"look": "aero", "look_mode": "dark"}) == ("aero", None)
+    ui._use_look(("liquid", "dark"))
+    assert ui.PREFIX == "LqD" and ui.PAGE != skin.hexrgb(skin.PAGE)
+    lay = ui._layouts("LqD", "LqD")
+    assert all(f"Slide{i}.TCheckbutton" in lay for i in range(8)) and "Slide0.TCheckbutton" not in ui._layouts("Aero")
+    ui._use_look(("aero", None))
+    assert (ui.PAGE, ui.CARD, ui.INK, ui.MUTED, ui.ACCENT) == (skin.hexrgb(skin.PAGE), "#ffffff", "#0b3d63", "#3f6987",
+                                                              "#0a84c6") and ui.C == ui.AERO_COLOURS
+    name, summary, items = config.whats_new_full(config.VERSION)
+    assert items and all(text for _h, text in items), "What's new has nothing to show for this version"
+    assert "What's new" in {p[1] for p in ui.PAGES}
+
+
+def check_liquid_bar():
+    """Liquid Glass on the graphics card must look like its Pillow drawing. Skipped where there's no OpenGL."""
+    from . import aero, liquid
+    try:
+        from . import glbar
+        gl = glbar.GLBar(liquid.LiquidBarRenderer(1.0).size)
+    except Exception as e:
+        print(f"  (graphics card drawing not checked here: {str(e)[:60]})")
+        return
+    lv = [0.2, 0.5, 0.8, 0.4, 0.6, 0.3, 0.7, 0.5, 0.9, 0.2, 0.4, 0.6, 0.8, 0.3, 0.5]
+    for mode in ("light", "dark"):
+        for frost in (False, True):
+            a = liquid.LiquidBarRenderer(1.0, frost=frost, mode=mode)
+            b = liquid.LiquidBarRenderer(1.0, frost=frost, mode=mode)
+            assert glbar.check(gl, b) < 3
+            for st, kw in (("idle", {}), ("recording", dict(levels=lv, t=1.0, caption="hello there")),
+                           ("locked", dict(levels=lv, t=0.7)), ("command", dict(levels=lv, t=0.4, phase=0.5)),
+                           ("processing", dict(t=0.8)), ("toast", dict(label="Copied", kind="ok"))):
+                want = a.render(st, **kw)
+                diff = glbar.difference(want, glbar.to_image(gl.frame(b.scene(st, **kw)), b.size))
+                assert diff < 3, f"Liquid Glass on the graphics card differs in {mode} {st}: {diff:.2f}"
+    gl.close()
+    assert aero.BARS == liquid.BARS
+
+
 def check_paste_wait():
     from . import instant
     t = [0.0]
@@ -506,6 +625,9 @@ def main():
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
                      ("learning & screen context", check_learning), ("instant text", check_instant), ("paste waits for the app", check_paste_wait), ("instant text tidies each sentence", check_sentence_tidy), ("edit by voice", check_voice_edit),
                      ("private mode", check_private_mode), ("new look", check_look), ("flow bar on the graphics card", check_gpu_bar),
+                     ("liquid glass theme", check_liquid_look),
+                     ("liquid glass on the graphics card", check_liquid_bar),
+                     ("liquid glass settings window", check_liquid_settings),
                      ("problem report", check_report)):
         fn()
         print(f"ok  {name}")

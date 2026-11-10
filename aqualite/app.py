@@ -48,7 +48,8 @@ class App:
         except tk.TclError as e:
             log.info("window icon not set: %s", e)
         self.bar = FlowBar(self.root, lambda: self.recorder.level, self._bar_clicked, self.cfg.get("show_idle_bar", False),
-                           self.cfg.get("frosted_glass", True), self.cfg.get("gpu_flow_bar", True))
+                           self.cfg.get("frosted_glass", True), self.cfg.get("gpu_flow_bar", True),
+                           look=self.cfg.get("look", "aero"), look_mode=self.cfg.get("look_mode", "system"))
         self.live = live.LiveCaption(self.recorder, self.cfg, lambda text: self.post("caption", text))
         self.learner = learn.Learner(lambda words: self.post("learned", words), on_edited=self._edited)
         self.edit_where = ("", "other")   # app + category of the dictation being watched for edits
@@ -74,6 +75,7 @@ class App:
 
         if IS_WIN:
             winapi.watch_open_requests(lambda: self.post("open_settings"))
+            winapi.watch_theme(lambda: self.post("windows_colours"))
         threading.Thread(target=self._worker, daemon=True, name="worker").start()
         deps.ensure_in_background(self._deps_done)
         self._preload()
@@ -87,6 +89,9 @@ class App:
         if updated_to:
             ready = f"Updated to {updated_to} - hold {ptt} and talk"
         follow_up = None
+        seen = self.cfg.get("last_seen_version")
+        if seen and seen.split(".")[0] != config.VERSION.split(".")[0]:   # a big update: show what's new once
+            self.root.after(1500, lambda: self.open_settings("What's new"))
         if self.cfg.get("last_seen_version") != config.VERSION:
             name, news = config.whats_new(config.VERSION)
             if news and self.cfg.get("last_seen_version"):
@@ -115,6 +120,20 @@ class App:
 
     def post(self, name, *args):
         self.events.put((name, args))
+
+    def ev_windows_colours(self):
+        """Windows switched light/dark or transparency: the Flow bar follows now; an open Settings window set to
+        Match Windows is rebuilt in the new colours. Several changes in a row are handled once."""
+        if getattr(self, "_colours_job", None):
+            self.root.after_cancel(self._colours_job)
+
+        def apply():
+            self._colours_job = None
+            self.bar.windows_changed()
+            s = self.settings
+            if s and s.win.winfo_exists():
+                s.follow_look()
+        self._colours_job = self.root.after(300, apply)
 
     def _on_key(self, vk, is_down):  # runs on the hook thread: must be quick
         swallowed = self.machine.on_key(vk, is_down)
@@ -599,6 +618,7 @@ class App:
         self.cfg.save()
         self.machine.configure(self.cfg)
         self.bar.show_idle = self.cfg.get("show_idle_bar", False)
+        self.bar.set_look(self.cfg.get("look", "aero"), self.cfg.get("look_mode", "system"))
         if self.cfg.get("frosted_glass", True) != self.bar.want_frost:
             self.bar.set_frost(self.cfg.get("frosted_glass", True))
         if self.cfg.get("gpu_flow_bar", True) != (self.bar.gl is not None):

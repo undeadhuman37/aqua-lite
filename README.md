@@ -2,7 +2,7 @@
 
 # Aqua Lite
 
-Free, open-source voice dictation for Windows with a Frutiger Aero look.
+Free, open-source voice dictation for Windows, in a classic Frutiger Aero look or clear Liquid Glass.
 Hold **Ctrl + Win**, speak, let go: clean, punctuated text appears wherever your cursor is, in WhatsApp, Gmail, Slack, Word, VS Code, ChatGPT or any other app.
 
 Aqua Lite is an independent project inspired by how [Wispr Flow](https://wisprflow.ai) works. It is built from the public
@@ -15,6 +15,10 @@ It is not affiliated with or endorsed by Wispr AI, Inc.
 
 - **Push-to-talk and hands-free:** hold `Ctrl + Win`, or tap it twice (or add `Space`) to keep listening. Hands-free finishes by itself after 8 seconds of silence. The Flow bar stays out of the way and only appears while you're dictating.
 - **Live words:** see what you're saying in a small bubble above the bar as you talk.
+- **Two looks:** the classic glossy Frutiger Aero, or Liquid Glass: clear glass in light or dark that flows from shape to shape. Switch any time in Settings, no restart.
+- **Instant text (optional, off by default):** words are typed while you talk, then tidied sentence by sentence. It can be a bit jittery for now: words may jump around or get corrected as you speak.
+- **Private mode:** a local AI model handles formatting, Command Mode and voice editing, and speech runs on your PC. Nothing leaves it.
+- **Edit by voice:** in Command Mode with nothing selected, say "delete the last sentence" or "change Thursday to Friday".
 - **Learns your corrections:** fix a word right after dictating ("Kaitlin" to "Kaitlyn") and it goes into your dictionary.
 - **Learns how you write:** reword what it typed (lowercase, no full stops, "5:30pm" instead of "5:30 PM") and it remembers, so the next dictations already come out your way.
 - **Understands the conversation (optional):** reads the chat you're replying to, so names, topic and tone fit. In Command Mode, say "reply to this saying I'm in" with nothing selected.

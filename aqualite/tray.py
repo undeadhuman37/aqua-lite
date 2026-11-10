@@ -24,6 +24,7 @@ class Tray:
             M("History", lambda: app.post("open_history")),
             M("Copy last transcript", lambda: app.post("copy_last")),
             M(lambda _i: "Resume" if app.paused else "Pause shortcuts", lambda: app.post("toggle_pause")),
+            M("What's new", lambda: app.post("open_settings", "What's new")),
             M("Check for updates", lambda: app.post("check_updates")),
             M("Report a problem", lambda: app.post("report_problem")),
             pystray.Menu.SEPARATOR,

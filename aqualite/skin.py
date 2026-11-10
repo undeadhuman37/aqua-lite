@@ -339,6 +339,14 @@ def _icon_shapes(d, name, u, col, wd):
         d.line(P((9, 18), (9, 5), (20, 3), (20, 16)), fill=col, width=wd, joint="curve")
         d.ellipse((3 * u, 15 * u, 9 * u, 21 * u), outline=col, width=wd)
         d.ellipse((14 * u, 13 * u, 20 * u, 19 * u), outline=col, width=wd)
+    elif name == "star":
+        import math
+        pts = []
+        for i in range(10):
+            a = -math.pi / 2 + i * math.pi / 5
+            rr = 9.5 if i % 2 == 0 else 4.2
+            pts.append((12 + rr * math.cos(a), 12.6 + rr * math.sin(a)))
+        d.line(P(*(pts + pts[:1])), fill=col, width=wd, joint="curve")
     elif name == "clock":
         d.ellipse((3 * u, 3 * u, 21 * u, 21 * u), outline=col, width=wd)
         d.line(P((12, 7), (12, 12), (15, 14)), fill=col, width=wd, joint="curve")

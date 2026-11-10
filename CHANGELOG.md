@@ -3,6 +3,27 @@
 Headings are `## <version>` or `## <version> - <update name>`. The first line under each heading is what the app
 shows once after updating (keep it under 52 characters).
 
+## 2.0.0 - Liquid Glass Update
+a new look, words as you talk, and a private mode
+- **Two looks:** keep the classic Frutiger Aero, or switch to Liquid Glass in Settings > Dictation > Theme. Liquid
+  Glass is clear glass with a bright rim, in light, dark or matching Windows, and the preview shows it before you save.
+- **The Flow bar flows:** in Liquid Glass it springs open, melts from shape to shape, breathes while it thinks, and the
+  live-words bubble grows out of it. Turn off Windows' animation effects and it fades instead.
+- **A new Settings window:** a sidebar of pages, and in Liquid Glass a sheet of glass with a highlight that glides
+  between them, switches that slide, and a dark mode with a dark title bar.
+- **Instant text (optional, off by default):** your words are typed while you talk and each sentence is tidied as you
+  go. It's still a bit jittery, so turn it on in Settings > Instant text if you'd like to try it.
+- **Edit by voice:** hold the Command Mode shortcut with nothing selected and say "delete the last sentence" or
+  "change Thursday to Friday".
+- **Private mode:** an AI model that runs on your PC does the formatting, Command Mode and voice editing, and speech
+  stays on your PC too. Nothing you say leaves it.
+- **Your style, written down:** what Aqua Lite learns from your edits becomes a short style profile per kind of app
+  that you can read, change, and take to another PC.
+- **Frosted glass:** the Flow bar softly blurs what's behind it, and follows Windows when you switch light or dark or
+  turn transparency off.
+- **Fixes:** long dictations no longer paste your old clipboard, and the Flow bar draws on the graphics card for
+  smoother motion with less work for your processor.
+
 ## 1.5.0 - Gets To Know You Update
 learns how you write and reads the chat you reply to
 - **Learns how you write:** when you reword what Aqua Lite typed (lowercase, no full stops, "5:30pm", fewer
