@@ -6,7 +6,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 
-from aqualite import aero  # noqa: E402
+from aqualite import aero, skin  # noqa: E402
 
 
 def banner():
@@ -36,7 +36,35 @@ def flow_bar():
     bg.save(os.path.join(HERE, "flow-bar.png"))
 
 
+def download_button():
+    """The README's download button: the app's own glossy aqua button, drawn at 2x for sharp screens."""
+    from PIL import Image, ImageDraw, ImageFilter
+    w, h = 600, 120
+    img = skin.button(w, h, "normal", primary=True)
+    font = aero._font_px(40)
+    text = "Download for Windows"
+    tw = font.getlength(text)
+    icon = 34
+    x = (w - (icon + 22 + tw)) / 2
+    cy = h / 2 - 4
+    words = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(words)
+    # a download arrow into a tray, in the same white as the words
+    ax = x + icon / 2
+    d.line((ax, cy - 16, ax, cy + 6), fill=(255, 255, 255, 255), width=5)
+    d.line((ax - 11, cy - 4, ax, cy + 7, ax + 11, cy - 4), fill=(255, 255, 255, 255), width=5, joint="curve")
+    d.line((x, cy + 8, x, cy + 15, x + icon, cy + 15, x + icon, cy + 8), fill=(255, 255, 255, 255), width=5,
+           joint="curve")
+    d.text((x + icon + 22, cy), text, font=font, fill=(255, 255, 255, 255), anchor="lm")
+    shade = Image.new("RGBA", img.size, (0, 42, 92, 0))
+    shade.putalpha(words.getchannel("A").point(lambda v: v * 150 // 255).filter(ImageFilter.GaussianBlur(1.5)))
+    img.alpha_composite(shade, (0, 2))
+    img.alpha_composite(words)
+    img.save(os.path.join(HERE, "download.png"))
+
+
 if __name__ == "__main__":
     banner()
     flow_bar()
-    print("docs/banner.png and docs/flow-bar.png updated")
+    download_button()
+    print("docs/banner.png, docs/flow-bar.png and docs/download.png updated")

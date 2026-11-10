@@ -1,7 +1,9 @@
-"""Settings: defaults, load/save. Stored in %APPDATA%\\AquaLite\\config.json."""
+"""Settings: defaults, load/save. Stored in %APPDATA%\\AquaLite\\config.json (on a Mac in
+~/Library/Application Support/AquaLite/config.json)."""
 import copy
 import json
 import os
+import sys
 import threading
 
 APP_NAME = "Aqua Lite"
@@ -38,8 +40,42 @@ def whats_new(version):
     return "", ""
 
 
+def whats_new_full(version):
+    """(update name, one-line summary, [(heading, text), ...]) for the What's new page: every '- **Heading:** text'
+    bullet of the version's CHANGELOG entry (continuation lines joined). Empty if there's no entry."""
+    import re
+    name, summary = whats_new(version)
+    try:
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "CHANGELOG.md"),
+                  encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return name, summary, []
+    head = re.compile(r"^##\s+" + re.escape(version) + r"(?:\s|$)")
+    start = next((i for i, x in enumerate(lines) if head.match(x.strip())), None)
+    if start is None:
+        return name, summary, []
+    items = []
+    for line in lines[start + 1:]:
+        if line.startswith("## "):
+            break
+        if line.startswith("- "):
+            items.append(line[2:].strip())
+        elif line.startswith("  ") and items and line.strip():
+            items[-1] += " " + line.strip()
+    out = []
+    for it in items:
+        m = re.match(r"\*\*(.+?)\*\*\s*(.*)", it)
+        h, text = (m.group(1).rstrip(":"), m.group(2)) if m else ("", it)
+        out.append((h, text.replace("**", "")))
+    return name, summary, out
+
+
 def data_dir():
-    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
+    if sys.platform == "darwin":
+        base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+    else:
+        base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
     d = os.path.join(base, "AquaLite")
     old = os.path.join(base, "Flowlite")  # the app's previous name: carry settings and history over
     if not os.path.exists(d) and os.path.isdir(old):
@@ -105,6 +141,8 @@ DEFAULTS = {
     "mic_device": "",                    # "" = Windows default input
     "sounds": True,
     "frosted_glass": True,
+    "look": "aero",                      # Flow bar theme: aero (Frutiger Aero, the default) | liquid (Liquid Glass)
+    "look_mode": "system",               # Liquid Glass colours: system (match Windows) | light | dark
     "gpu_flow_bar": True,                # draw the Flow bar on the graphics card (falls back to the processor)               # the Flow bar is see-through glass and Windows blurs what's behind it
     "show_idle_bar": False,              # False = the Flow bar only appears while you're dictating
     "whisper_boost": True,               # auto-gain for quiet / whispered speech
@@ -137,6 +175,19 @@ DEFAULTS = {
     "first_run": True,
     "settings_version": 2,
 }
+
+# A Mac keyboard: hold Fn (the globe key) to talk, as Wispr Flow does on a Mac. Command is the Win key and Option
+# is Alt for hotkeys.py; Ctrl+Option works too for keyboards without Fn (type "ctrl+option").
+MAC_DEFAULTS = {
+    "hotkey_ptt": "fn",
+    "hotkey_handsfree_key": "space",
+    "hotkey_command_key": "cmd",         # not part of fn or ctrl+option, so it never clashes with them
+    "hotkey_paste_last": "ctrl+cmd+v",
+    "hotkey_undo_last": "ctrl+cmd+x",
+    "context_blocked_apps": DEFAULTS["context_blocked_apps"] + ["keychain access", "passwords"],
+}
+if sys.platform == "darwin":
+    DEFAULTS.update(MAC_DEFAULTS)
 
 _lock = threading.Lock()
 

@@ -1,4 +1,7 @@
-"""Pure text + rule helpers (no Windows calls, so they can be unit tested anywhere)."""
+"""Pure text + rule helpers (no system calls, so they can be unit tested anywhere).
+
+App names are Windows process names; on a Mac, osapi/mac.py maps well-known apps to the same names (Google Chrome
+-> chrome, Visual Studio Code -> code) and the Mac-only ones (terminal, iterm2, safari, applemail) are listed too."""
 import re
 
 # ---------------------------------------------------------------- paste rules
@@ -29,12 +32,12 @@ _PERSONAL = ("whatsapp", "telegram", "signal", "messenger", "instagram", "discor
 _WORK = ("slack", "teams", "ms-teams", "zoom", "google chat", "mattermost", "linear", "notion",
          "asana", "jira", "clickup", "monday", "trello", "basecamp")
 _EMAIL = ("outlook", "olk", "thunderbird", "hxoutlook", "mailspring", "spark", "gmail",
-          "inbox", "mail -", "proton mail", "superhuman")
+          "inbox", "mail -", "proton mail", "superhuman", "applemail")
 _CODE_PROCS = ("code", "cursor", "windsurf", "idea64", "pycharm64", "webstorm64", "rider64",
                "clion64", "goland64", "devenv", "sublime_text", "notepad++", "windowsterminal",
                "powershell", "pwsh", "cmd", "wezterm-gui", "alacritty", "zed", "android studio",
-               "studio64")
-_BROWSERS = ("chrome", "msedge", "firefox", "brave", "opera", "arc", "vivaldi", "zen")
+               "studio64", "terminal", "iterm2", "warp", "ghostty", "kitty", "xcode")
+_BROWSERS = ("chrome", "msedge", "firefox", "brave", "opera", "arc", "vivaldi", "zen", "safari")
 
 
 def app_category(proc, title=""):
@@ -152,7 +155,7 @@ _ENTER_ANYWHERE = re.compile(r"[\s,;:-]*\b(?:press|hit|and press|and hit)\s+(?:t
 _ENTER_OWN_SENTENCE = re.compile(r"(?:^|(?<=[.!?]))\s*\b(?:send it|send message|send that)[\s.!?]*$", re.IGNORECASE)
 _ENTER_ARABIC = re.compile(r"[\s،,-]*(?:اضغط|إضغط)\s+(?:انتر|إنتر|enter)[\s.!?؟]*$", re.IGNORECASE)
 SLOW_PASTE = ("whatsapp", "slack", "teams", "ms-teams", "discord", "messenger", "signal", "chrome", "msedge",
-              "firefox", "brave", "opera", "arc", "vivaldi", "zen")
+              "firefox", "brave", "opera", "arc", "vivaldi", "zen", "safari")
 
 
 def enter_delay(proc):
@@ -161,7 +164,8 @@ def enter_delay(proc):
     return 0.5 if proc.lower().startswith(SLOW_PASTE) else 0.3
 
 
-TERMINALS = ("windowsterminal", "powershell", "pwsh", "cmd", "conhost", "wezterm-gui", "alacritty", "mintty")
+TERMINALS = ("windowsterminal", "powershell", "pwsh", "cmd", "conhost", "wezterm-gui", "alacritty", "mintty",
+             "terminal", "iterm2", "warp", "ghostty", "kitty")
 
 
 def split_enter_command(text):

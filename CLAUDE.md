@@ -1,7 +1,8 @@
 # Aqua Lite - notes for Claude Code
 
-Aqua Lite is a free, open-source voice dictation app for Windows (a Wispr Flow-style tool), styled Frutiger Aero:
-glossy sky-blue glass. Python with Tk/ttk and Pillow; the Flow bar can also draw through OpenGL (moderngl).
+Aqua Lite is a free, open-source voice dictation app (a Wispr Flow-style tool) for Windows, with a first macOS port
+(untested on a real Mac). Styled Frutiger Aero: glossy sky-blue glass (optional Liquid Glass theme). Python with Tk/ttk
+and Pillow; the Flow bar can also draw through OpenGL (moderngl).
 
 ## Rules
 
@@ -13,14 +14,63 @@ glossy sky-blue glass. Python with Tk/ttk and Pillow; the Flow bar can also draw
   overwriting a file there, check it still matches what you expect (mtime guard), and check the result byte for byte.
 - Line length 120. User-facing text: sentence case, plain words, no periods on short labels.
 
-## Testing on Linux
+## Code map (`aqualite/`)
 
-- `python3-tk` (apt) gives tkinter for `/usr/bin/python3.12`; `pip install -r requirements.txt` plus `pyflakes`.
-- Run anything that opens a window under `xvfb-run -a -s "-screen 0 1280x800x24"` (Mesa's llvmpipe provides
-  OpenGL 4.5 there, so the graphics-card Flow bar runs and can be compared with the Pillow drawing).
-- Self-test: `python3.12 -c "from aqualite import selftest; selftest.main()"` from the repo root. It must pass
-  before anything is installed or released. Windows-only checks (clipboard, keyboard hook) run only on Windows.
+Every module starts with a docstring saying what it does; big files are split by `# ----- name` section headers
+(`grep -n "# ---" aqualite/app.py` gives a table of contents).
+
+| Area | Modules |
+|---|---|
+| Entry and wiring | `AquaLite.pyw` (starts it), `app.py` (`App`: events from the hotkey thread go through `post()` -> `ev_*` on the Tk thread; slow work goes to the `_worker` thread via `self.jobs`) |
+| Shortcuts | `hotkeys.py` (pure state machine on Windows VK codes; the Mac tap translates into them) |
+| Recording and speech | `audio.py` (16 kHz mic), `stt.py` (Groq/OpenAI/local Whisper), `live.py` (live words + quick instant-text model), `gpu.py` (NVIDIA engine) |
+| Instant text and editing | `instant.py` (typing while you talk, `Polisher`, `safe_to_replace`), `edits.py` (edit by voice) |
+| AI | `llm.py` (prompts and providers), `localai.py` (private mode, llama.cpp), `memory.py` (style profile), `learn.py` (learning from corrections), `context.py` (screen context) |
+| Text rules | `textproc.py` (pure: paste keys, app categories by process name, cleanup, snippets) |
+| Flow bar | `overlay.py` (`FlowBar`: state, animation, frame pacing), `aero.py` / `liquid.py` (Pillow drawing per theme), `glbar.py` (same frames on the graphics card) |
+| Settings window | `ui.py` (`SettingsWindow`; `PAGES` maps each sidebar page to its builder method, e.g. "Dictation" -> `_general`), `skin.py` / `liquidskin.py` (drawn controls per theme), `permissions.py` (Mac permissions window) |
+| Other UI | `tray.py` (tray / menu bar icon), `sounds.py`, `music.py` |
+| Storage and upkeep | `config.py` (`DEFAULTS`, `MAC_DEFAULTS`, data folder), `history.py` (SQLite), `updater.py`, `deps.py`, `report.py` |
+| Operating system | `osapi/` (see below), `winapi.py` (raw Windows calls, used only by `osapi/win.py`) |
+| Checks | `selftest.py` (one `check_*` function per area, listed in `main()`) |
+
+Outside `aqualite/`: `install.bat` / `uninstall.bat` and `installer/` (Windows), `install-mac.sh` / `uninstall-mac.sh`
+(Mac), `docs/MAC.md` (Mac status and tester checklist), `.claude/skills/liquid-glass/` (theme guide).
+
+## Where to change what
+
+| To change... | Look in |
+|---|---|
+| A default setting | `config.DEFAULTS` (Mac-only defaults: `config.MAC_DEFAULTS`); its Settings control in `ui.py` |
+| A shortcut name or rule | `hotkeys.KEY_NAMES` / `HotkeyMachine`; Mac key codes in `osapi/mac.py` `MAC_TO_VK` |
+| Anything that touches the OS (keys, clipboard, focused app, windows, theme) | add it to `osapi/other.py`, `win.py` and `mac.py` (the self-test fails if one lacks a name) |
+| How an app is treated (terminal, email, slow paste) | `textproc.py` lists (Windows process names; `mac.py` `BUNDLE_NAMES` maps Mac apps onto them) |
+| AI wording | `llm.py` prompts |
+| The Flow bar's look | `aero.FlowBarRenderer` / `liquid.LiquidBarRenderer` (`render()` for Pillow, `scene()` for `glbar`) |
+| A Settings page | the builder named in `ui.PAGES` |
+
+## Testing
+
+- Self-test: `python -c "from aqualite import selftest; selftest.main()"` from the repo root. It must pass before
+  anything is installed or released. It compiles every file, but doesn't run `app.py`: also run
+  `python -m pyflakes aqualite/` (that's how a broken `if/else` in `app.py` was caught).
+- On Windows: the installed venv `%LOCALAPPDATA%\AquaLite\venv\Scripts\python.exe` has every package. Use it to run
+  things, never install into it. The self-test's Windows checks briefly use the real clipboard (and put it back).
+- On Linux: `python3-tk` (apt) gives tkinter for `/usr/bin/python3.12`; `pip install -r requirements.txt` plus
+  `pyflakes`. Run anything that opens a window under `xvfb-run -a -s "-screen 0 1280x800x24"` (Mesa's llvmpipe gives
+  OpenGL 4.5, so the graphics-card Flow bar runs and can be compared with the Pillow drawing).
 - `winapi.py` only imports on Windows; test its pure functions by exec'ing them alone or with injected helpers.
+- Files are stored with LF, checked out CRLF on Windows (`core.autocrlf`); `*.sh` stay LF (`.gitattributes`).
+
+## Platform layer (`aqualite/osapi/`)
+
+- App code does `from . import osapi` and calls `osapi.paste(...)`, `osapi.foreground()`, `osapi.Overlay(...)`.
+  `osapi/__init__.py` picks `win.py`, `mac.py` or `other.py` the first time a name is used, so Windows never loads
+  PyObjC. Flags: `osapi.SUPPORTED` (can type into other apps), `IS_WIN`, `IS_MAC`, `CAN_RELEASE_KEYS`, `PASTE_KEYS`.
+- `other.py` is the interface list (does nothing; Linux). `win.py` = `winapi.py` + UI Automation (moved there from
+  instant/learn/context). `common.py` = pure clipboard-restore rules shared by both.
+- `mac.py` has never run on a Mac: each section is marked `UNTESTED`. It imports anywhere (PyObjC optional), so the
+  self-test checks its pure parts on Windows. Don't call `winapi` from app code.
 
 ## What 2.0 contains (on `v2`, not released)
 
@@ -29,9 +79,9 @@ glossy sky-blue glass. Python with Tk/ttk and Pillow; the Flow bar can also draw
    context so "actually, make that Thursday" still corrects it) and swaps it in place; with the quick model each
    sentence's audio is first re-heard by the main speech engine (`App._rehear`). Letting go runs `App._quick_finish`:
    a last pass over the end, tidy the last sentence, `LiveTyper.settle` changes only what differs. Option
-   `instant_text_recheck` restores the old full re-transcription. Every edit is guarded by reading the box through UI
-   Automation (`text_before_caret`); `_box_matches` waits for busy web editors to catch up before deciding the user
-   changed the box.
+   `instant_text_recheck` restores the old full re-transcription. Every edit is guarded by reading the box
+   (`text_before_caret`, through `osapi`); `_box_matches` waits for busy web editors to catch up before deciding the
+   user changed the box.
 2. **Edit by voice** (`edits.py`, `App._voice_edit`): Command Mode with nothing selected edits the text box.
 3. **Private mode** (`localai.py`): a llama.cpp model run by the app; formatting, style memory, screen context,
    Command Mode and voice editing all go to it. Speech is local too, and Deepgram is never used in private mode.
@@ -39,18 +89,29 @@ glossy sky-blue glass. Python with Tk/ttk and Pillow; the Flow bar can also draw
    export/import moves it to another PC.
 5. **New look** (`skin.py`, `ui.py`, `aero.py`, `overlay.py`, `glbar.py`, `winapi.Frost`): sidebar Settings with
    Pillow-drawn controls (drawn solid on their surface with wide 9-slice middles: see-through or tiny-middle images
-   made Settings unusably slow on Windows); frosted Flow bar with Windows blur behind it; the bar's frames are put
-   together on the graphics card (`FlowBarRenderer.scene()` -> `glbar.GLBar`), falling back to Pillow if a test frame
-   doesn't match or anything fails.
+   made Settings unusably slow on Windows); frosted Flow bar with Windows blur behind it (Windows 10 only: Windows 11
+   draws the glass itself); the bar's frames are put together on the graphics card (`FlowBarRenderer.scene()` ->
+   `glbar.GLBar`), falling back to Pillow if a test frame doesn't match or anything fails.
+6. **Liquid Glass theme** (optional; Frutiger Aero stays the default and unchanged): Settings > Dictation > Theme
+   (`look` aero | liquid, `look_mode` system | light | dark). Flow bar: `liquid.LiquidBarRenderer` (springs and
+   shape-morphing drawn by `glbar` LGLASS while moving, cached pictures at rest; Pillow fallback). Settings window:
+   `liquidskin.Skin(mode)` mirrors `skin.py`, `ui.apply_style`/`apply_liquid_style`, a glass sidebar with a gliding
+   bead, sliding switches (styles `Slide0..7.TCheckbutton`), dark title bar, live Flow bar preview. The window is
+   rebuilt when the look changes. `osapi.watch_theme` follows light/dark and transparency without polling.
+   Guide: `.claude/skills/liquid-glass/SKILL.md`.
+7. **What's new page** (Settings and tray): built from the CHANGELOG entry (`config.whats_new_full`); opens by itself
+   once after a major update.
 
-Also on `v2`: the clipboard is restored only after the paste has landed (`winapi._restore_when_pasted`), which fixed
-long dictations pasting the user's old clipboard.
+Also on `v2`: the clipboard is restored only after the paste has landed (`osapi/common.restore_when_pasted`), which
+fixed long dictations pasting the user's old clipboard.
 
 ## Still open before releasing 2.0
 
 - The owner hasn't yet dictated with private mode switched on (the model download itself works).
 - Confirm on Windows: blur lines up behind the Flow bar, white text readable over white apps, title bar tinted on
   Windows 11, graphics-card Flow bar active (and CPU lower) once `moderngl` has installed itself.
-- Release only when the owner approves: set `VERSION` to 2.0.0, write the CHANGELOG entry (first line 52 characters
-  or fewer), update the README (mention instant text can be a bit jittery and is off by default), run the self-test,
-  push to `main`, confirm the installer build.
+- Confirm on Windows: Liquid Glass Settings in light and dark (title bar, dropdown lists, History table), the Flow
+  bar morph and the blur behind the caption bubble.
+- `VERSION` is 2.0.0 on `v2` and the CHANGELOG/README entries are written. Release only when the owner approves:
+  run the self-test, push to `main`, confirm the installer build.
+- Mac: needs a Mac tester (`docs/MAC.md`) before it's announced.

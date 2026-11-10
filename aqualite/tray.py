@@ -1,4 +1,4 @@
-"""System tray icon (bottom-right of the taskbar)."""
+"""System tray icon (bottom-right of the taskbar on Windows, the menu bar on a Mac)."""
 from PIL import ImageDraw
 
 
@@ -17,13 +17,15 @@ class Tray:
         self.app = app
         self.pystray = pystray
         M = pystray.MenuItem
-        self.icon = pystray.Icon("Aqua Lite", make_icon_image(), "Aqua Lite - hold Ctrl+Win to talk", menu=pystray.Menu(
+        keys = "+".join(k.strip().capitalize() for k in app.cfg.get("hotkey_ptt", "ctrl+win").split("+"))
+        self.icon = pystray.Icon("Aqua Lite", make_icon_image(), f"Aqua Lite - hold {keys} to talk", menu=pystray.Menu(
             M("Open Aqua Lite", lambda: app.post("open_settings"), default=True),
             M(lambda _i: "Stop and insert text" if app.machine.recording else "Start hands-free dictation",
               lambda: app.post("stop_recording" if app.machine.recording else "start_handsfree")),
             M("History", lambda: app.post("open_history")),
             M("Copy last transcript", lambda: app.post("copy_last")),
             M(lambda _i: "Resume" if app.paused else "Pause shortcuts", lambda: app.post("toggle_pause")),
+            M("What's new", lambda: app.post("open_settings", "What's new")),
             M("Check for updates", lambda: app.post("check_updates")),
             M("Report a problem", lambda: app.post("report_problem")),
             pystray.Menu.SEPARATOR,

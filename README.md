@@ -2,8 +2,16 @@
 
 # Aqua Lite
 
-Free, open-source voice dictation for Windows with a Frutiger Aero look.
+Free, open-source voice dictation for Windows, in a classic Frutiger Aero look or clear Liquid Glass.
 Hold **Ctrl + Win**, speak, let go: clean, punctuated text appears wherever your cursor is, in WhatsApp, Gmail, Slack, Word, VS Code, ChatGPT or any other app.
+
+<p align="center">
+  <a href="https://github.com/undeadhuman37/aqua-lite/releases/latest/download/AquaLite-Setup.exe">
+    <img src="docs/download.png" alt="Download for Windows" width="300">
+  </a>
+  <br>
+  <sub>Free for Windows 10 and 11 &middot; <a href="https://github.com/undeadhuman37/aqua-lite/releases/latest">All downloads and release notes</a></sub>
+</p>
 
 Aqua Lite is an independent project inspired by how [Wispr Flow](https://wisprflow.ai) works. It is built from the public
 [wispr-flow-rea-teardown](https://github.com/az9713/wispr-flow-rea-teardown) analysis and contains no Wispr code.
@@ -15,6 +23,10 @@ It is not affiliated with or endorsed by Wispr AI, Inc.
 
 - **Push-to-talk and hands-free:** hold `Ctrl + Win`, or tap it twice (or add `Space`) to keep listening. Hands-free finishes by itself after 8 seconds of silence. The Flow bar stays out of the way and only appears while you're dictating.
 - **Live words:** see what you're saying in a small bubble above the bar as you talk.
+- **Two looks:** the classic glossy Frutiger Aero, or Liquid Glass: clear glass in light or dark that flows from shape to shape. Switch any time in Settings, no restart.
+- **Instant text (optional, off by default):** words are typed while you talk, then tidied sentence by sentence. It can be a bit jittery for now: words may jump around or get corrected as you speak.
+- **Private mode:** a local AI model handles formatting, Command Mode and voice editing, and speech runs on your PC. Nothing leaves it.
+- **Edit by voice:** in Command Mode with nothing selected, say "delete the last sentence" or "change Thursday to Friday".
 - **Learns your corrections:** fix a word right after dictating ("Kaitlin" to "Kaitlyn") and it goes into your dictionary.
 - **Learns how you write:** reword what it typed (lowercase, no full stops, "5:30pm" instead of "5:30 PM") and it remembers, so the next dictations already come out your way.
 - **Understands the conversation (optional):** reads the chat you're replying to, so names, topic and tone fit. In Command Mode, say "reply to this saying I'm in" with nothing selected.
@@ -49,6 +61,22 @@ and run it. You don't need Python. Windows may show a SmartScreen warning becaus
 Aqua Lite updates itself: every time it starts, it checks GitHub for a newer version, installs it and restarts
 (you'll see "Updated to ..." at the bottom of the screen). You can also pick **Check for updates** from the tray menu,
 or turn automatic updates off in Settings. Running `install.bat` again also updates. To remove everything, run `uninstall.bat`.
+
+## Install (macOS, preview)
+
+Mac support is new and **hasn't been tried on a Mac yet**. If you have one, testing it helps a lot: the checklist is in
+[docs/MAC.md](docs/MAC.md).
+
+1. Install Python 3.12 from [python.org](https://www.python.org/downloads/macos/) (it includes Tk).
+2. Download this repository, open Terminal in its folder and run `bash install-mac.sh`. It sets up a private environment in
+   `~/Library/Application Support/AquaLite`, runs the self-test and adds **Aqua Lite** to your Applications folder.
+3. Open Aqua Lite. macOS asks for **Accessibility**, **Input Monitoring** and the **microphone**: allow each one, then quit
+   and reopen it. Aqua Lite lives in the menu bar.
+4. Hold **Fn** (the globe key) and talk; `Fn + Space` is hands-free and `Fn + Cmd` is Command Mode. Keyboards without Fn
+   can use `ctrl+option` (Settings > Dictation). Set **System Settings > Keyboard > Press fn key to** to **Do Nothing**.
+
+The app isn't signed or notarized yet (that needs an Apple Developer account), so it's installed from source rather than
+as a download. To remove it, run `bash uninstall-mac.sh`.
 
 ## Shortcuts
 

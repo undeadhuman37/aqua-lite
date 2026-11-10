@@ -1,18 +1,24 @@
 """Shortcut logic, driven by raw virtual-key codes from a low-level keyboard hook.
 
 Works on VK codes (not characters), so it behaves the same with Arabic, English or any layout.
-Pure Python: the Windows hook in winapi.py feeds it, and selftest.py drives it directly.
+Pure Python: the keyboard hook of osapi (winapi.py on Windows, mac.py on a Mac) feeds it, and selftest.py drives
+it directly. The Mac hook turns Mac key codes into these same Windows codes: Command is the Win key, Option is Alt,
+and Fn (the globe key) gets a code of its own, FN, that no Windows key uses.
 """
 import time
 
 CTRL, SHIFT, ALT, WIN = {0x11, 0xA2, 0xA3}, {0x10, 0xA0, 0xA1}, {0x12, 0xA4, 0xA5}, {0x5B, 0x5C}
-MODIFIER_VKS = CTRL | SHIFT | ALT | WIN
+FN = {0x100}   # Mac Fn / globe key (outside the Windows key range)
+MODIFIER_VKS = CTRL | SHIFT | ALT | WIN | FN
 
 KEY_NAMES = {
     "ctrl": CTRL, "control": CTRL, "lctrl": {0xA2}, "left ctrl": {0xA2}, "rctrl": {0xA3}, "right ctrl": {0xA3},
     "shift": SHIFT, "lshift": {0xA0}, "rshift": {0xA1}, "right shift": {0xA1},
     "alt": ALT, "lalt": {0xA4}, "left alt": {0xA4}, "ralt": {0xA5}, "right alt": {0xA5}, "altgr": {0xA5},
     "win": WIN, "windows": WIN, "lwin": {0x5B}, "rwin": {0x5C},
+    "cmd": WIN, "command": WIN, "lcmd": {0x5B}, "rcmd": {0x5C}, "right cmd": {0x5C},
+    "option": ALT, "opt": ALT, "loption": {0xA4}, "roption": {0xA5}, "right option": {0xA5},
+    "fn": FN, "globe": FN, "return": {0x0D},
     "space": {0x20}, "backspace": {0x08}, "esc": {0x1B}, "escape": {0x1B}, "tab": {0x09}, "enter": {0x0D},
     "capslock": {0x14}, "caps lock": {0x14}, "insert": {0x2D}, "delete": {0x2E}, "home": {0x24},
     "end": {0x23}, "pageup": {0x21}, "pagedown": {0x22}, "pause": {0x13}, "scrolllock": {0x91},

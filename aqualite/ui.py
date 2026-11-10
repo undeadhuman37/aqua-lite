@@ -1,14 +1,13 @@
 """Settings / dashboard window: a glassy sidebar of pages, each page a scrolling column of cards."""
 import datetime
+import math
 import os
-import subprocess
-import sys
 import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import aero, gpu, history, hotkeys, llm, localai, memory, music, skin, stt
+from . import aero, gpu, history, hotkeys, llm, localai, memory, music, osapi, skin, stt
 from .config import APP_NAME, VERSION
 
 LANGS = [("auto", "Auto-detect"), ("en", "English"), ("ar", "Arabic"), ("fr", "French"), ("es", "Spanish"),
@@ -28,6 +27,10 @@ CATS = [("personal", "Personal messages", "WhatsApp, Telegram, Instagram, Discor
         ("other", "Everything else", "Docs, browsers, notes, AI chats")]
 STRENGTHS = [("verbatim", "Verbatim - punctuation only"), ("light", "Light - fillers & corrections"),
              ("medium", "Medium - also smooth grammar"), ("heavy", "Heavy - polish & tighten")]
+LOOKS = [("aero", "Frutiger Aero"), ("liquid", "Liquid Glass")]
+OS = "macOS" if osapi.IS_MAC else "Windows"   # the system's name in labels
+LOOK_MODES = [("system", f"Match {OS}"), ("light", "Light"), ("dark", "Dark")]
+MIC_DEFAULT = f"({OS} default)"
 
 
 def _pair_combo(parent, pairs, value, width=28):
@@ -40,11 +43,19 @@ def _pair_combo(parent, pairs, value, width=28):
 
 PAGE, CARD, INK, MUTED, ACCENT = skin.hexrgb(skin.PAGE), "#ffffff", "#0b3d63", "#3f6987", "#0a84c6"
 BG = PAGE
+# The Settings window's look. Frutiger Aero's values are the ones it always had; Liquid Glass's come from
+# liquidskin.Skin. _use_look switches them (the window is rebuilt when the look changes).
+AERO_COLOURS = dict(eyebrow="#34607f", warn="#b45309", line="#cfe6f6", focus="#2fa3e6", select="#bfe6ff",
+                    list_bg="white", nav_group="#34607f", nav_shade="#0b5f99", nav_on_ink="#ffffff",
+                    nav_on_icon=(255, 255, 255), title=((64, 166, 229), (255, 255, 255), (11, 106, 168)),
+                    dark_title=False)
+SKIN, PREFIX, C, LOOK_KEY = skin, "Aero", dict(AERO_COLOURS), ("aero", None)
 REPO_URL = "https://github.com/undeadhuman37/aqua-lite"
 
 # sidebar: (group, page name, icon, the builders that fill the page)
 PAGES = (
     ("General", "Home", "home", ("_home",)),
+    ("General", "What's new", "star", ("_news",)),
     ("General", "Dictation", "mic", ("_general",)),
     ("General", "Instant text", "bolt", ("_instant",)),
     ("Intelligence", "Speech & AI", "sparkle", ("_ai",)),
@@ -56,6 +67,7 @@ PAGES = (
 )
 HEADINGS = {
     "Home": ("Hold the shortcut, talk, let go", "Your words go wherever your cursor is"),
+    "What's new": (f"What's new in {VERSION}", "Everything that changed in this update, and a quick way to try it"),
     "Dictation": ("Dictation", "Shortcuts, microphone and how dictating behaves"),
     "Instant text": ("Instant text", "Words appear while you talk, then the polished version replaces them when you "
                                      "let go. It's still a bit jittery: words can jump around or get corrected as you "
@@ -73,8 +85,37 @@ ALIASES = {"Shortcuts & mic": "Dictation", "Private": "Private mode", "Style": "
 CONTAINERS = ("Panel.TFrame", "Pick.TFrame", "PickOn.TFrame", "Tile.TFrame")   # white cards
 _IN_CARD = {"TLabel", "TCheckbutton", "TRadiobutton", "TFrame", "TButton", "TEntry", "TCombobox", "TSpinbox",
             "TScale", "TProgressbar"}
-_IMAGES = {}   # ttk image elements: created once and kept for the app's lifetime (ttk keeps using them)
+_IMAGES = {}   # ttk image elements: created once per look and kept for the app's lifetime (ttk keeps using them)
+_MADE = set()  # looks whose elements exist
+_SLIDES = {}   # Liquid Glass: element set -> how many frames a switch's slide has (styles Slide0..7.TCheckbutton)
 _CARD_STYLES = set()
+
+
+def look_key(cfg):
+    """("aero", None) or ("liquid", "light" | "dark"): the look the Settings window should have."""
+    if cfg.get("look") == "liquid":
+        from . import liquid
+        return "liquid", liquid.resolve_mode(cfg.get("look_mode", "system"))
+    return "aero", None
+
+
+def _use_look(key):
+    """Point the module's colours and drawings at a look."""
+    global SKIN, PREFIX, C, LOOK_KEY, PAGE, CARD, INK, MUTED, ACCENT, BG
+    LOOK_KEY = key
+    if key[0] == "liquid":
+        from . import liquidskin
+        SKIN = liquidskin.Skin(key[1])
+        PREFIX = "LqL" if key[1] == "light" else "LqD"
+        h = skin.hexrgb
+        C = {k: (h(v) if isinstance(v, tuple) and len(v) == 3 and isinstance(v[0], int) else v)
+             for k, v in SKIN.ui.items()}
+        C.update(nav_shade=None, focus=h(SKIN.ACCENT), nav_on_icon=SKIN.ui["nav_on_icon"])
+        PAGE, CARD, INK, MUTED, ACCENT = h(SKIN.PAGE), h(SKIN.CARD), h(SKIN.INK), h(SKIN.MUTED), h(SKIN.ACCENT_TEXT)
+    else:
+        SKIN, PREFIX, C = skin, "Aero", dict(AERO_COLOURS)
+        PAGE, CARD, INK, MUTED, ACCENT = skin.hexrgb(skin.PAGE), "#ffffff", "#0b3d63", "#3f6987", "#0a84c6"
+    BG = PAGE
 
 
 def _SURFACE_STATES(colour):  # noqa: N802
@@ -125,6 +166,10 @@ def _flat(im, bg):
 SURFACES = (("Aero", skin.PAGE), ("AeroCard", skin.CARD))   # element set -> the colour it sits on
 
 
+def _surfaces():
+    return SURFACES if PREFIX == "Aero" else ((PREFIX, SKIN.PAGE), (PREFIX + "Card", SKIN.CARD))
+
+
 def _make_elements(st, root, sc):
     """Draw every themed piece once (at the screen's scale) and register it as a ttk image element.
 
@@ -137,6 +182,7 @@ def _make_elements(st, root, sc):
         return max(1, int(round(v * sc)))
 
     def P(key, im):
+        key = key if PREFIX == "Aero" else f"{PREFIX}/{key}"
         _IMAGES[key] = ImageTk.PhotoImage(im, master=root)
         return _IMAGES[key]
 
@@ -148,76 +194,85 @@ def _make_elements(st, root, sc):
     ph, sh = s(16), s(22)
     pb = (s(8), s(7), s(8), s(7))
     fw, fh = s(40), s(28)
-    disabled_field = (240, 245, 249)
-    for E, bg in SURFACES:
+    disabled_field = getattr(SKIN, "FIELD_OFF", (240, 245, 249))
+    for E, bg in _surfaces():
         for kind, primary in (("button", False), ("primary", True)):
-            im = {k: P(f"{E}_{kind}_{k}", _flat(_grow(skin.button(bw, bh, k, primary), bb, w=s(420)), bg))
+            im = {k: P(f"{E}_{kind}_{k}", _flat(_grow(SKIN.button(bw, bh, k, primary), bb, w=s(420)), bg))
                   for k in ("normal", "active", "pressed", "disabled")}
             el(f"{E}.{kind}", im["normal"], ("disabled", im["disabled"]), ("pressed", im["pressed"]),
                ("active", im["active"]), border=bb, padding=(s(2), s(1), s(2), s(3)), sticky="nsew",
                width=bw, height=bh)
-        t = {(on, k): P(f"{E}_tg_{on}_{k}", _flat(skin.toggle(s(20), on, k, gap=s(8)), bg)) for on in (0, 1)
+        t = {(on, k): P(f"{E}_tg_{on}_{k}", _flat(SKIN.toggle(s(20), on, k, gap=s(8)), bg)) for on in (0, 1)
              for k in ("normal", "active", "disabled")}
         el(f"{E}.toggle", t[0, "normal"], ("disabled selected", t[1, "disabled"]), ("disabled", t[0, "disabled"]),
            ("selected", t[1, "normal"]), ("active", t[0, "active"]), sticky="")
-        r = {(on, k): P(f"{E}_rd_{on}_{k}", _flat(skin.radio(s(18), on, k, gap=s(8)), bg)) for on in (0, 1)
+        r = {(on, k): P(f"{E}_rd_{on}_{k}", _flat(SKIN.radio(s(18), on, k, gap=s(8)), bg)) for on in (0, 1)
              for k in ("normal", "active", "disabled")}
         el(f"{E}.radio", r[0, "normal"], ("disabled selected", r[1, "disabled"]), ("disabled", r[0, "disabled"]),
            ("selected", r[1, "normal"]), ("active", r[0, "active"]), sticky="")
         b8 = (s(8),) * 4
-        f = {k: P(f"{E}_fld_{k}", _flat(_grow(skin.field(fw, fh, k), b8, w=s(600)), bg))
+        f = {k: P(f"{E}_fld_{k}", _flat(_grow(SKIN.field(fw, fh, k), b8, w=s(600)), bg))
              for k in ("normal", "active", "focus", "disabled")}
         el(f"{E}.field", f["normal"], ("disabled", f["disabled"]), ("focus", f["focus"]), ("active", f["active"]),
            border=b8, padding=s(3), sticky="nsew", width=fw, height=fh)
-        trough = _flat(_grow(skin.progress_trough(s(120), ph), pb, w=s(1000)), bg)
+        trough = _flat(_grow(SKIN.progress_trough(s(120), ph), pb, w=s(1000)), bg)
         el(f"{E}.ptrough", P(f"{E}_ptrough", trough), border=pb, padding=s(2), sticky="nsew", width=s(120),
            height=ph)
         st_b = (s(10), 0, s(10), 0)
-        strough = _flat(_grow(skin.scale_trough(s(120), sh), st_b, w=s(1000)), bg)
+        strough = _flat(_grow(SKIN.scale_trough(s(120), sh), st_b, w=s(1000)), bg)
         el(f"{E}.strough", P(f"{E}_strough", strough), border=st_b, sticky="nsew", width=s(120), height=sh)
         under = strough.crop((s(40), 0, s(40) + sh, sh))   # the plain groove the ball sits on
-        sl = {k: P(f"{E}_sl_{k}", _flat(skin.slider(sh, k), under)) for k in ("normal", "active", "pressed")}
+        sl = {k: P(f"{E}_sl_{k}", _flat(SKIN.slider(sh, k), under)) for k in ("normal", "active", "pressed")}
         el(f"{E}.slider", sl["normal"], ("pressed", sl["pressed"]), ("active", sl["active"]), sticky="")
     # the combobox arrow sits on the white field, whichever surface the field is on
-    a = {k: P(f"arr_{k}", _flat(skin.arrow(s(24), s(22), k), disabled_field if k == "disabled" else skin.CARD))
+    field_bg = getattr(SKIN, "FIELD", SKIN.CARD)
+    a = {k: P(f"arr_{k}", _flat(SKIN.arrow(s(24), s(22), k), disabled_field if k == "disabled" else field_bg))
          for k in ("normal", "active", "disabled")}
-    el("Aero.arrow", a["normal"], ("disabled", a["disabled"]), ("active", a["active"]), sticky="")
+    el(f"{PREFIX}.arrow", a["normal"], ("disabled", a["disabled"]), ("active", a["active"]), sticky="")
     # the progress fill sits on the trough; it's a single short run of pieces, so it keeps its soft edges
     pfill = (s(6), s(5), s(6), s(5))
-    el("Aero.pbar", P("pbar", _grow(skin.progress_bar(s(40), ph - 2 * s(2)), pfill, w=s(1000))), border=pfill,
+    el(f"{PREFIX}.pbar", P("pbar", _grow(SKIN.progress_bar(s(40), ph - 2 * s(2)), pfill, w=s(1000))), border=pfill,
        sticky="nsew", width=s(40), height=ph - 2 * s(2))
     # the page scrollbar floats over the page
     tbb = (0, s(7), 0, s(7))
-    tb = {k: P(f"th_{k}", _flat(_grow(skin.thumb(s(12), s(48), k), tbb, h=s(900)), skin.PAGE))
+    tb = {k: P(f"th_{k}", _flat(_grow(SKIN.thumb(s(12), s(48), k), tbb, h=s(900)), SKIN.PAGE))
           for k in ("normal", "active", "pressed")}
-    el("AeroV.thumb", tb["normal"], ("pressed", tb["pressed"]), ("active", tb["active"]), border=tbb,
+    el(f"{PREFIX}V.thumb", tb["normal"], ("pressed", tb["pressed"]), ("active", tb["active"]), border=tbb,
        sticky="nsew", width=s(12), height=s(48))
-    el("AeroV.trough", P("vtrough", Image.new("RGB", (s(12), s(900)), skin.PAGE)), sticky="nsew", width=s(12),
+    el(f"{PREFIX}V.trough", P("vtrough", Image.new("RGB", (s(12), s(900)), SKIN.PAGE)), sticky="nsew", width=s(12),
        height=s(12))
     # cards (already solid: drawn on the page colour)
     cs, cb = s(48), (s(18),) * 4
     pad = (s(4), s(3), s(4), s(5))   # keeps children off the rounded edge and the shadow
     for key, sel in (("card", False), ("cardsel", True)):
-        im = _flat(_grow(skin.card(cs, radius=12, selected=sel), cb, w=s(900), h=s(500)), skin.PAGE)
-        el(f"Aero.{key}", P(key, im), border=cb, padding=pad, sticky="nsew", width=cs, height=cs)
+        im = _flat(_grow(SKIN.card(cs, selected=sel), cb, w=s(900), h=s(500)), SKIN.PAGE)
+        el(f"{PREFIX}.{key}", P(key, im), border=cb, padding=pad, sticky="nsew", width=cs, height=cs)
     pill_b = (s(11), s(5), s(11), s(5))
-    for name, (fill, _ink) in skin.PILLS.items():
-        im = _flat(_grow(skin.pill(s(40), s(22), fill), pill_b, w=s(300)), skin.CARD)
-        el(f"Aero.pill.{name}", P(f"pill_{name}", im), border=pill_b, padding=(s(10), s(2), s(10), s(3)),
+    for name, (fill, _ink) in SKIN.PILLS.items():
+        im = _flat(_grow(SKIN.pill(s(40), s(22), fill), pill_b, w=s(300)), SKIN.CARD)
+        pad_l, pad_r = (s(10), s(10)) if PREFIX == "Aero" else (s(18), s(4))   # Liquid Glass: a dot, then text
+        el(f"{PREFIX}.pill.{name}", P(f"pill_{name}", im), border=pill_b, padding=(pad_l, s(2), pad_r, s(3)),
            sticky="nsew", width=s(40), height=s(22))
     key_b = (s(7), s(5), s(7), s(8))
-    el("Aero.key", P("key", _flat(_grow(skin.keycap(s(28), s(24)), key_b, w=s(240)), skin.CARD)), border=key_b,
+    el(f"{PREFIX}.key", P("key", _flat(_grow(SKIN.keycap(s(28), s(24)), key_b, w=s(240)), SKIN.CARD)), border=key_b,
        padding=(s(7), s(2), s(7), s(4)), sticky="nsew", width=s(28), height=s(24))
+    if hasattr(SKIN, "toggle_between"):   # Liquid Glass switches slide: frames for the click
+        frames = [SKIN.toggle_between(s(20), i / 7, gap=s(8)) for i in range(8)]
+        for E, bg in _surfaces():
+            for i, f in enumerate(frames):
+                el(f"{E}.tgslide{i}", P(f"{E}_tgslide{i}", _flat(f, bg)), sticky="")
+            _SLIDES[E] = len(frames)
 
 
-def _layouts(E):
-    """The ttk layouts for the controls, built from element set E ("Aero" on the page, "AeroCard" on a card)."""
+def _layouts(E, B="Aero"):
+    """The ttk layouts for the controls, built from element set E ("Aero" on the page, "AeroCard" on a card); B is
+    the look's own set (for pieces that look the same on both)."""
     inner = [("Button.padding", {"sticky": "nsew", "children": [("Button.label", {"sticky": "nsew"})]})]
 
     def check(base, ind):
         return [(f"{base}.padding", {"sticky": "nsew", "children": [
             (f"{E}.{ind}", {"side": "left", "sticky": ""}), (f"{base}.label", {"side": "left", "sticky": "nsew"})]})]
-    return {
+    lay = {
         "TButton": [(f"{E}.button", {"sticky": "nsew", "children": inner})],
         "Primary.TButton": [(f"{E}.primary", {"sticky": "nsew", "children": inner})],
         "TCheckbutton": check("Checkbutton", "toggle"),
@@ -225,7 +280,7 @@ def _layouts(E):
         "TEntry": [(f"{E}.field", {"sticky": "nsew", "children": [
             ("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})]})],
         "TCombobox": [(f"{E}.field", {"sticky": "nsew", "children": [
-            ("Aero.arrow", {"side": "right", "sticky": ""}),
+            (f"{B}.arrow", {"side": "right", "sticky": ""}),
             ("Combobox.padding", {"expand": "1", "sticky": "nsew", "children": [
                 ("Combobox.textarea", {"sticky": "nsew"})]})]})],
         "TSpinbox": [(f"{E}.field", {"sticky": "nsew", "children": [
@@ -234,13 +289,26 @@ def _layouts(E):
                 ("Spinbox.downarrow", {"side": "bottom", "sticky": "e"})]}),
             ("Spinbox.padding", {"sticky": "nsew", "children": [("Spinbox.textarea", {"sticky": "nsew"})]})]})],
         "Horizontal.TProgressbar": [(f"{E}.ptrough", {"sticky": "nsew", "children": [
-            ("Aero.pbar", {"side": "left", "sticky": "ns"})]})],
+            (f"{B}.pbar", {"side": "left", "sticky": "ns"})]})],
         "Horizontal.TScale": [(f"{E}.strough", {"sticky": "nsew", "children": [
             (f"{E}.slider", {"side": "left", "sticky": ""})]})],
     }
+    if B != "Aero":   # Liquid Glass: the switch part way through its slide, one style per frame
+        for i in range(8):
+            lay[f"Slide{i}.TCheckbutton"] = check("Checkbutton", f"tgslide{i}")
+    return lay
 
 
 _CARD_LAYOUTS = _layouts("AeroCard")
+
+
+def apply_style(win, key=("aero", None)):
+    """Theme the Settings window: Frutiger Aero or Liquid Glass (light or dark)."""
+    global _CARD_LAYOUTS
+    _use_look(key)
+    _CARD_STYLES.clear()   # the 'Card.' copies are rebuilt for this look as widgets ask for them
+    _CARD_LAYOUTS = _layouts(PREFIX + "Card", PREFIX)
+    return apply_aero_style(win) if key[0] == "aero" else apply_liquid_style(win)
 
 
 def apply_aero_style(win, keep=None):
@@ -261,7 +329,8 @@ def apply_aero_style(win, keep=None):
     for name in (".", "TButton", "Primary.TButton", "TCheckbutton", "TRadiobutton", "TEntry", "TCombobox",
                  "TSpinbox", "Horizontal.TScale", "Horizontal.TProgressbar", "TLabel"):
         st.map(name, background=_SURFACE_STATES(PAGE))
-    if not _IMAGES:
+    if "Aero" not in _MADE:
+        _MADE.add("Aero")
         _make_elements(st, win._root(), sc)
     st.configure("TFrame", background=PAGE)
     st.configure("TLabel", background=PAGE, foreground=INK)
@@ -321,6 +390,83 @@ def apply_aero_style(win, keep=None):
     return st
 
 
+def apply_liquid_style(win):
+    """Liquid Glass ttk theme: glass capsule buttons, iOS-style switches, soft filled fields, cards lifted off a
+    calm page by a wide faint shadow. Light or dark, from liquidskin.Skin."""
+    st = ttk.Style(win)
+    st.theme_use("clam")
+    sc = _scale(win)
+
+    def s(v):
+        return max(1, int(round(v * sc)))
+    font = ("Segoe UI", 10)
+    semi = "Segoe UI Semibold"
+    field = skin.hexrgb(SKIN.FIELD)
+    win.configure(bg=PAGE)
+    st.configure(".", background=PAGE, foreground=INK, font=font, fieldbackground=field, bordercolor=C["line"],
+                 lightcolor=CARD, darkcolor=C["line"], troughcolor=skin.hexrgb(SKIN.TRACK), focuscolor=C["focus"],
+                 selectbackground=C["select"], selectforeground=INK, insertcolor=INK)
+    st.map(".", foreground=[("disabled", C["disabled_fg"])])
+    for name in (".", "TButton", "Primary.TButton", "TCheckbutton", "TRadiobutton", "TEntry", "TCombobox",
+                 "TSpinbox", "Horizontal.TScale", "Horizontal.TProgressbar", "TLabel"):
+        st.map(name, background=_SURFACE_STATES(PAGE))
+    if PREFIX not in _MADE:
+        _MADE.add(PREFIX)
+        _make_elements(st, win._root(), sc)
+    st.configure("TFrame", background=PAGE)
+    st.configure("TLabel", background=PAGE, foreground=INK)
+    for name, extra in (("H1.TLabel", dict(font=("Segoe UI", 24))),
+                        ("Sub.TLabel", dict(font=("Segoe UI", 11), foreground=MUTED)),
+                        ("CardHead.TLabel", dict(font=(semi, 11))), ("Strong.TLabel", dict(font=(semi, 10))),
+                        ("Eyebrow.TLabel", dict(font=(semi, 9), foreground=C["eyebrow"])),
+                        ("Stat.TLabel", dict(font=("Segoe UI", 26), foreground=INK)),
+                        ("Muted.TLabel", dict(foreground=MUTED)), ("Warn.TLabel", dict(foreground=C["warn"]))):
+        st.configure(name, **extra)
+    for name in CONTAINERS[:3]:
+        st.layout(name, [(f"{PREFIX}.cardsel" if name == "PickOn.TFrame" else f"{PREFIX}.card", {"sticky": "nsew"})])
+    st.layout("Tile.TFrame", [(f"{PREFIX}.card", {"sticky": "nsew"})])
+    st.configure("Line.TFrame", background=C["line"])
+    for name, lay in _layouts(PREFIX, PREFIX).items():
+        st.layout(name, lay)
+    st.configure("TButton", padding=(s(16), s(4), s(16), s(6)), foreground=C["btn_ink"], font=(semi, 10),
+                 anchor="center", width=-6)
+    st.configure("Primary.TButton", foreground=C["primary_ink"], padding=(s(24), s(4), s(24), s(6)))
+    st.map("Primary.TButton", foreground=[("disabled", C["primary_dis"])])
+    st.map("TButton", foreground=[("disabled", C["disabled_fg"])])
+    for cls in ("TCheckbutton", "TRadiobutton"):
+        st.configure(cls, background=PAGE, padding=(s(1), s(3)))
+    st.configure("Title.TRadiobutton", font=(semi, 11))
+    st.configure("TEntry", padding=(s(8), s(3)))
+    st.configure("TCombobox", padding=(s(8), s(3)), arrowcolor=INK)
+    st.map("TCombobox", fieldbackground=[("readonly", field)], selectbackground=[("readonly", field)],
+           selectforeground=[("readonly", INK)], foreground=[("disabled", C["disabled_fg"])])
+    st.configure("TSpinbox", padding=(s(8), s(2)), arrowcolor=INK, arrowsize=s(10), lightcolor=field,
+                 darkcolor=field, bordercolor=field, fieldbackground=field)
+    win.option_add("*TCombobox*Listbox.font", "{Segoe UI} 10")
+    win.option_add("*TCombobox*Listbox.selectBackground", C["select"])
+    win.option_add("*TCombobox*Listbox.selectForeground", INK)
+    win.option_add("*TCombobox*Listbox.background", C["list_bg"])
+    win.option_add("*TCombobox*Listbox.foreground", INK)
+    st.layout("Page.Vertical.TScrollbar", [(f"{PREFIX}V.trough", {"sticky": "ns", "children": [
+        (f"{PREFIX}V.thumb", {"expand": "1", "sticky": "nsew"})]})])
+    st.configure("Treeview", background=C["list_bg"], fieldbackground=C["list_bg"], foreground=INK,
+                 rowheight=s(28), bordercolor=C["line"], lightcolor=C["line"], darkcolor=C["line"])
+    st.configure("Treeview.Heading", background=C["head_bg"], foreground=MUTED, font=(semi, 9), relief="flat",
+                 bordercolor=C["line"], lightcolor=C["head_bg"], darkcolor=C["line"], padding=(s(8), s(4)))
+    st.map("Treeview.Heading", background=[("active", C["head_hot"])])
+    st.map("Treeview", background=[("selected", C["select"])], foreground=[("selected", INK)])
+    for name, (_fill, ink) in SKIN.PILLS.items():
+        sty = f"{name.title()}Pill.TLabel"
+        st.layout(sty, [(f"{PREFIX}.pill.{name}", {"sticky": "nsew", "children": [
+            ("Label.label", {"sticky": "nsew"})]})])
+        st.configure(sty, foreground=skin.hexrgb(ink), font=("Segoe UI", 10), background=CARD)
+    st.layout("Key.TLabel", [(f"{PREFIX}.key", {"sticky": "nsew", "children": [("Label.label", {"sticky": "nsew"})]})])
+    st.configure("Key.TLabel", font=("Consolas", 10, "bold"), foreground=INK, background=CARD)
+    st.configure("TLabelframe", background=PAGE, bordercolor=C["line"])
+    st.configure("TLabelframe.Label", background=PAGE, foreground=INK, font=(semi, 11))
+    return st
+
+
 def _card_restyle(st, w):
     """A widget sitting on a white card gets a 'Card.' copy of its style with a white background (ttk can't see
     through to the card, so a page-coloured label would show as a blue box)."""
@@ -341,12 +487,21 @@ def _card_restyle(st, w):
     w.configure(style=new)
 
 
+def _blur_ok():
+    """Windows can blur behind the Flow bar's rounded shape (Windows 10; not Windows 11, not a Mac yet)."""
+    try:
+        return osapi.frost_supported()
+    except Exception:
+        return False
+
+
 def _key_name(k):
     k = k.strip().lower()
     names = {"ctrl": "Ctrl", "win": "Win", "alt": "Alt", "shift": "Shift", "space": "Space", "esc": "Esc",
              "escape": "Esc", "enter": "Enter", "tab": "Tab", "rctrl": "Right Ctrl", "lctrl": "Left Ctrl",
              "ralt": "Right Alt", "lalt": "Left Alt", "rshift": "Right Shift", "lshift": "Left Shift",
-             "capslock": "Caps Lock", "backspace": "Backspace"}
+             "capslock": "Caps Lock", "backspace": "Backspace", "fn": "Fn", "globe": "Fn", "cmd": "Cmd",
+             "command": "Cmd", "rcmd": "Right Cmd", "option": "Option", "opt": "Option", "roption": "Right Option"}
     return names.get(k, k.upper() if len(k) <= 3 else k.title())
 
 
@@ -381,7 +536,10 @@ class SettingsWindow:
             pass
         self.v = {}
         self._imgs = []
-        self.style = apply_aero_style(self.win, self._imgs)
+        self._pv, self._pv_running = {}, False   # live Flow bar previews: page -> what to draw
+        self.look = look_key(self.cfg)
+        self.style = apply_style(self.win, self.look)
+        self.glide = self.look[0] == "liquid"   # Liquid Glass: things slide and spring instead of jumping
         self.sc = _scale(self.win)
         s = self._s
         self.wrap = s(640)
@@ -424,9 +582,93 @@ class SettingsWindow:
                 self.win.bind(seq, lambda _e: self._step(-1))
             except tk.TclError:
                 pass
+        self._slide, self._slide_job = None, None
+        if self.glide:   # switches slide across instead of jumping
+            self.win.bind("<ButtonRelease-1>", self._slide_toggle, add="+")
+        self.win.bind("<Destroy>", self._closed, add="+")
         self._tint_title()
         self.win.lift()
         self.win.focus_force()
+
+    def _closed(self, e):
+        if e.widget is self.win:
+            self._pv = None   # stops the Flow bar previews
+
+    # ------------------------------------------------------------------ theme
+    def follow_look(self):
+        """Windows changed light/dark: rebuild this window if it's set to match."""
+        if look_key(self.app.cfg) != self.look:
+            self._rebuild()
+
+    def _rebuild(self, status=""):
+        """Open this window again in the new look, on the same page (ttk styles are shared, so it's redrawn)."""
+        page, app, root = self.current, self.app, self.win.master
+        geo = self.win.geometry()
+        self.win.destroy()
+
+        def again():
+            app.settings = None
+            app.open_settings(page)
+            try:
+                app.settings.win.geometry(geo)
+                app.settings.status.configure(text=status)
+            except (tk.TclError, AttributeError):
+                pass
+        root.after(30, again)
+
+    def _slide_toggle(self, e):
+        """A Liquid Glass switch was clicked: run its bead across in a few frames (the clicked one only)."""
+        w = e.widget
+        try:
+            if w.winfo_class() != "TCheckbutton" or w.instate(["disabled"]):
+                return
+            style = str(w.cget("style")) or "TCheckbutton"
+        except (tk.TclError, AttributeError):
+            return
+        if style not in ("TCheckbutton", "Card.TCheckbutton"):
+            return
+        card = style.startswith("Card.")
+        n = _SLIDES.get(PREFIX + ("Card" if card else ""))
+        if not n:
+            return
+        if self._slide is not None:
+            self._slide_end()
+        if card:
+            for i in range(n):
+                name = f"Card.Slide{i}.TCheckbutton"
+                if name not in _CARD_STYLES:
+                    self.style.layout(name, _CARD_LAYOUTS[f"Slide{i}.TCheckbutton"])
+                    self.style.configure(name, background=CARD)
+                    self.style.map(name, background=_SURFACE_STATES(CARD))
+                    _CARD_STYLES.add(name)
+        self._slide = dict(w=w, style=style, on=w.instate(["selected"]), n=n, t0=time.perf_counter(),
+                           prefix="Card." if card else "")
+        self._slide_step()
+
+    def _slide_step(self):
+        sl = self._slide
+        p = (time.perf_counter() - sl["t0"]) / 0.26
+        if p >= 1:
+            self._slide_end()
+            return
+        e = 1 - (1 - p) ** 3
+        x = e if sl["on"] else 1 - e
+        try:
+            sl["w"].configure(style=f"{sl['prefix']}Slide{round(x * (sl['n'] - 1))}.TCheckbutton")
+        except tk.TclError:
+            self._slide = None
+            return
+        self._slide_job = self.win.after(12, self._slide_step)
+
+    def _slide_end(self):
+        sl, self._slide = self._slide, None
+        if self._slide_job is not None:
+            self.win.after_cancel(self._slide_job)
+            self._slide_job = None
+        try:
+            sl["w"].configure(style=sl["style"])
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------------ frame
     def _s(self, v):
@@ -438,13 +680,10 @@ class SettingsWindow:
 
     def _tint_title(self):
         """Windows 11 colours the title bar to match (Windows 10 keeps its own)."""
-        if sys.platform != "win32":
+        if not osapi.SUPPORTED:
             return
         try:
-            from . import winapi
-            self.win.update_idletasks()
-            hwnd = winapi.user32.GetParent(self.win.winfo_id()) or self.win.winfo_id()
-            winapi.tint_title_bar(hwnd, (64, 166, 229), (255, 255, 255), (11, 106, 168))
+            osapi.title_bar(self.win, C["dark_title"], *C["title"])
         except Exception:
             pass
 
@@ -452,7 +691,7 @@ class SettingsWindow:
         from PIL import ImageTk
         s = self._s
         self.side_w = sw = s(224)
-        cv = tk.Canvas(self.win, width=sw, highlightthickness=0, bd=0, bg=skin.hexrgb(skin.SIDEBAR[1]))
+        cv = tk.Canvas(self.win, width=sw, highlightthickness=0, bd=0, bg=skin.hexrgb(SKIN.SIDEBAR[1]))
         cv.grid(row=0, column=0, rowspan=2, sticky="ns")
         self.side = cv
 
@@ -464,22 +703,24 @@ class SettingsWindow:
         cv.create_text(x + s(42), y + s(1), text=APP_NAME, anchor="nw", font=("Segoe UI Semibold", 13), fill=INK)
         cv.create_text(x + s(42), y + s(21), text="Settings", anchor="nw", font=("Segoe UI", 9), fill=MUTED)
         y += s(58)
-        pw, ph = sw - s(24), s(38)
-        sel_img, hot_img = P(skin.nav_pill(pw, ph, "selected")), P(skin.nav_pill(pw, ph, "hover"))
+        inset = s(16) if self.glide else s(12)
+        pw, ph = sw - 2 * inset, s(36) if self.glide else s(38)
+        sel_img, hot_img = P(SKIN.nav_pill(pw, ph, "selected")), P(SKIN.nav_pill(pw, ph, "hover"))
+        self._sel_img = sel_img
         self.nav, group = [], None
         mid = ph // 2 - s(1)
         for i, (g, name, ic, _b) in enumerate(PAGES):
             if g != group:
                 group = g
-                y += s(10) if i else 0
-                cv.create_text(s(24), y, text=g, anchor="nw", font=("Segoe UI Semibold", 9), fill="#34607f")
+                y += (s(22) if self.glide else s(10)) if i else 0
+                cv.create_text(s(24), y, text=g, anchor="nw", font=("Segoe UI Semibold", 9), fill=C["nav_group"])
                 y += s(19)
             item = {"y0": y, "y1": y + ph,
-                    "hot": cv.create_image(s(12), y, image=hot_img, anchor="nw", state="hidden"),
-                    "sel": cv.create_image(s(12), y, image=sel_img, anchor="nw", state="hidden"),
-                    "icons": (P(skin.icon(ic, s(18))), P(skin.icon(ic, s(18), (255, 255, 255))))}
+                    "hot": cv.create_image(inset, y, image=hot_img, anchor="nw", state="hidden"),
+                    "sel": cv.create_image(inset, y, image=sel_img, anchor="nw", state="hidden"),
+                    "icons": (P(SKIN.icon(ic, s(18), SKIN.INK)), P(SKIN.icon(ic, s(18), C["nav_on_icon"])))}
             item["icon"] = cv.create_image(s(28), y + mid, image=item["icons"][0], anchor="w")
-            item["shade"] = cv.create_text(s(56), y + mid + 1, text=name, anchor="w", fill="#0b5f99",
+            item["shade"] = cv.create_text(s(56), y + mid + 1, text=name, anchor="w", fill=C["nav_shade"] or INK,
                                            font=("Segoe UI Semibold", 10), state="hidden")
             item["text"] = cv.create_text(s(56), y + mid, text=name, anchor="w", fill=INK, font=("Segoe UI", 10))
             self.nav.append(item)
@@ -490,6 +731,10 @@ class SettingsWindow:
         self.side_link = cv.create_text(s(24), 0, text="Aqua Lite on GitHub", anchor="sw",
                                         font=("Segoe UI", 9, "underline"), fill=ACCENT)
         self.side_hot, self.side_sel = None, None
+        # Liquid Glass: one bead of glass that glides from page to page on a spring
+        self.bead_x = inset
+        self.bead = cv.create_image(inset, self.nav[0]["y0"], image=sel_img, anchor="nw", state="hidden")
+        self.bead_spring, self.bead_job, self.bead_t = None, None, 0.0
         cv.bind("<Configure>", self._side_resize)
         cv.bind("<Motion>", self._side_motion)
         cv.bind("<Leave>", lambda _e: self._side_hover(None))
@@ -500,7 +745,7 @@ class SettingsWindow:
         if getattr(self, "_side_h", None) == e.height:
             return
         self._side_h = h = e.height
-        self._side_img = ImageTk.PhotoImage(skin.sidebar(self.side_w, max(h, 1)), master=self.win)
+        self._side_img = ImageTk.PhotoImage(SKIN.sidebar(self.side_w, max(h, 1)), master=self.win)
         self.side.itemconfigure(self.side_bg, image=self._side_img)
         s = self._s
         state = "normal" if h >= self.side_need else "hidden"
@@ -554,14 +799,44 @@ class SettingsWindow:
         cv = self.side
         for i, item in enumerate(self.nav):
             on = i == idx
-            cv.itemconfigure(item["sel"], state="normal" if on else "hidden")
+            cv.itemconfigure(item["sel"], state="normal" if on and not self.glide else "hidden")
             if on:
                 cv.itemconfigure(item["hot"], state="hidden")
             cv.itemconfigure(item["icon"], image=item["icons"][1 if on else 0])
-            cv.itemconfigure(item["shade"], state="normal" if on else "hidden")
-            cv.itemconfigure(item["text"], fill="#ffffff" if on else INK,
+            cv.itemconfigure(item["shade"], state="normal" if on and C["nav_shade"] else "hidden")
+            cv.itemconfigure(item["text"], fill=C["nav_on_ink"] if on else INK,
                              font=("Segoe UI Semibold", 10) if on else ("Segoe UI", 10))
         self.side_sel = idx
+        if self.glide:
+            self._glide_to(self.nav[idx]["y0"])
+
+    def _glide_to(self, y):
+        """Move the glass bead to a page's row: a quick spring with a small overshoot, like Apple's sidebar."""
+        from . import liquid
+        cv = self.side
+        if self.bead_spring is None or not cv.winfo_ismapped():
+            self.bead_spring = liquid.Spring(y, response=0.32, damping=0.85)   # a small bounce
+            cv.coords(self.bead, self.bead_x, y)
+            cv.itemconfigure(self.bead, state="normal")
+            cv.tag_lower(self.bead)
+            cv.tag_raise(self.bead, self.side_bg)
+            return
+        self.bead_spring.target = y
+        if self.bead_job is None:
+            self.bead_t = time.perf_counter()
+            self.bead_job = self.win.after(0, self._bead_step)
+
+    def _bead_step(self):
+        now = time.perf_counter()
+        dt, self.bead_t = min(now - self.bead_t, 0.05), now
+        sp = self.bead_spring
+        sp.step(dt)
+        try:
+            self.side.coords(self.bead, self.bead_x, sp.x)
+        except tk.TclError:
+            self.bead_job = None
+            return
+        self.bead_job = None if sp.resting() else self.win.after(8, self._bead_step)
 
     def _make_page(self, name, builders):
         s = self._s
@@ -692,8 +967,8 @@ class SettingsWindow:
 
     def _boxed(self, widget):
         """Plain Tk lists and text boxes, dressed to match: white, a thin sky border, focus glow colour."""
-        widget.configure(bg="white", fg=INK, relief="flat", bd=0, highlightthickness=1,
-                         highlightbackground="#cfe6f6", highlightcolor="#2fa3e6", selectbackground="#bfe6ff",
+        widget.configure(bg=C["list_bg"], fg=INK, relief="flat", bd=0, highlightthickness=1,
+                         highlightbackground=C["line"], highlightcolor=C["focus"], selectbackground=C["select"],
                          selectforeground=INK, font=("Segoe UI", 10))
         if isinstance(widget, tk.Text):
             widget.configure(insertbackground=INK, padx=self._s(8), pady=self._s(5))
@@ -766,10 +1041,111 @@ class SettingsWindow:
             self._keys(kf, pre, combo, suf)
             ttk.Label(box, text=desc, style="Muted.TLabel").grid(row=i, column=1, sticky="w", padx=(s(18), 0))
 
+    # ------------------------------------------------------------------ Flow bar preview
+    def _preview_look(self):
+        """Show the chosen theme's Flow bar, live, over a little desktop, before saving."""
+        look = self.look_box.get_key()
+        self.look_mode_box.configure(state="readonly" if look == "liquid" else "disabled")
+        self._preview_set("Dictation", self.preview, look, self.look_mode_box.get_key())
+
+    def _preview_set(self, page, label, look, mode):
+        """Start (or change) the live Flow bar preview shown in `label` on `page`."""
+        from PIL import Image, ImageDraw
+        sc = self.sc * 0.9
+        if look == "liquid":
+            from . import liquid, liquidskin
+            mode = liquid.resolve_mode(mode)
+            r = liquid.LiquidBarRenderer(sc, frost=False, mode=mode)
+            back = liquidskin.Skin(mode).backdrop(*r.size)
+        else:
+            r = aero.FlowBarRenderer(sc)
+            top, bottom = (120, 196, 245), (226, 244, 255)
+            col = Image.new("RGB", (1, r.size[1]))
+            col.putdata([tuple(int(a + (b - a) * y / max(1, r.size[1] - 1)) for a, b in zip(top, bottom))
+                         for y in range(r.size[1])])
+            back = col.resize(r.size)
+        mask = Image.new("L", r.size, 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, r.size[0] - 1, r.size[1] - 1), radius=self._s(12), fill=255)
+        self._pv[page] = dict(r=r, back=back.convert("RGBA"), mask=mask, label=label, t0=time.perf_counter())
+        if not self._pv_running:
+            self._pv_running = True
+            self._preview_step()
+
+    def _preview_step(self):
+        """One frame of the preview on the open page: listening with words, thinking, then done, round and round.
+        About 15 times a second, and only while its page is showing."""
+        from PIL import Image, ImageTk
+        if self._pv is None:
+            return
+        try:
+            pv = self._pv.get(self.current)
+            if pv is not None and self.win.winfo_viewable():
+                t = time.perf_counter() - pv["t0"]
+                k = t % 6.0
+                levels = [0.25 + 0.22 * math.sin(t * 5.1 + i * 0.7) + 0.18 * math.sin(t * 8.3 + i * 1.9)
+                          for i in range(aero.BARS + 1)]
+                levels = [max(0.0, min(1.0, v)) for v in levels]
+                if k < 3.6:
+                    img = pv["r"].render("recording", "", levels, t, "info", "Your words show up here as you talk",
+                                         1.0, min(1.0, k / 0.5))
+                elif k < 4.8:
+                    img = pv["r"].render("processing", "", levels, t)
+                else:
+                    img = pv["r"].render("toast", "Pasted", levels, t, "ok")
+                frame = pv["back"].copy()
+                frame.alpha_composite(img)
+                flat = Image.new("RGB", frame.size, tuple(int(CARD[i:i + 2], 16) for i in (1, 3, 5)))
+                flat.paste(frame, (0, 0), pv["mask"])
+                pv["img"] = ImageTk.PhotoImage(flat, master=self.win)
+                pv["label"].configure(image=pv["img"])
+            self.win.after(66, self._preview_step)
+        except tk.TclError:
+            self._pv = None
+
+    def _news(self, f):
+        """What's new: the CHANGELOG entry for this version, a card per change, and buttons to try things."""
+        from . import config
+        s = self._s
+        name, summary, items = config.whats_new_full(VERSION)
+        hero = self._card(f, f"Aqua Lite {VERSION}" + (f": {name}" if name else ""), summary.capitalize() or None)
+        shot = ttk.Label(hero)
+        shot.pack(anchor="w", pady=(s(2), s(8)))
+        # the new Flow bar, live: Liquid Glass in the colours this window uses (or Windows' when it's Aero)
+        mode = self.look[1] or "system"
+        self.win.after(350, lambda: self._preview_set("What's new", shot, "liquid", mode))
+        acts = ttk.Frame(hero)
+        acts.pack(anchor="w", pady=(s(4), 0))
+        if self.look[0] == "aero":
+            ttk.Button(acts, text="Try Liquid Glass", style="Primary.TButton",
+                       command=lambda: self._try_look("liquid")).pack(side="left")
+        else:
+            ttk.Button(acts, text="Back to Frutiger Aero", command=lambda: self._try_look("aero")).pack(side="left")
+        ttk.Button(acts, text="Instant text", command=lambda: self.show("Instant text")).pack(side="left",
+                                                                                          padx=(s(8), 0))
+        ttk.Button(acts, text="Private mode", command=lambda: self.show("Private mode")).pack(side="left",
+                                                                                          padx=(s(8), 0))
+        if not items:
+            return
+        box = self._card(f)
+        for i, (head, text) in enumerate(items):
+            row = ttk.Frame(box)
+            row.pack(fill="x", pady=(0 if i == 0 else s(10), 0))
+            if head:
+                ttk.Label(row, text=head, style="Strong.TLabel").pack(anchor="w")
+            ttk.Label(row, text=text[:1].upper() + text[1:], style="Muted.TLabel", wraplength=self.wrap).pack(
+                anchor="w")
+
+    def _try_look(self, look):
+        """One click from What's new: switch theme and save, so the window and the Flow bar change right away."""
+        labels = dict(LOOKS)
+        self.look_box.set(labels[look])
+        self.save()
+
     def _general(self, f):
         keys = self._card(f, "Shortcuts")
         for r, (key, label, hint) in enumerate((
-                ("hotkey_ptt", "Push-to-talk (hold)", "e.g. ctrl+win, f9, right alt, rctrl"),
+                ("hotkey_ptt", "Push-to-talk (hold)", "e.g. fn, ctrl+option, f5, right cmd" if osapi.IS_MAC
+                 else "e.g. ctrl+win, f9, right alt, rctrl"),
                 ("hotkey_handsfree_key", "+ key for hands-free", "pressed while holding push-to-talk"),
                 ("hotkey_command_key", "+ key for Command Mode", "pressed while holding push-to-talk"),
                 ("hotkey_paste_last", "Paste last transcript", ""),
@@ -777,8 +1153,8 @@ class SettingsWindow:
                 ("hotkey_cancel", "Cancel recording", ""))):
             self._row(keys, r, label, ttk.Entry(keys, textvariable=self._var(key), width=24), hint)
         mic_card = self._card(f, "Microphone & language")
-        devices = ["(Windows default)"] + _safe_devices()
-        mic = tk.StringVar(value=self.cfg.get("mic_device") or "(Windows default)")
+        devices = [MIC_DEFAULT] + _safe_devices()
+        mic = tk.StringVar(value=self.cfg.get("mic_device") or MIC_DEFAULT)
         self.v["mic_device"] = mic
         mic_list = ttk.Combobox(mic_card, textvariable=mic, values=devices, state="readonly", width=44)
         self._row(mic_card, 0, "Microphone", mic_list)
@@ -796,15 +1172,29 @@ class SettingsWindow:
             ("double_tap_handsfree", "Tap the shortcut twice for hands-free"),
             ("sounds", "Play start/stop sounds"),
             ("show_idle_bar", "Keep the Flow bar on screen when idle (click it to start hands-free)"),
-            ("frosted_glass", "Frosted glass Flow bar: see-through, with what's behind it softly blurred"),
+            ("frosted_glass", "Frosted glass Flow bar: see-through, with what's behind it softly blurred"
+                              + ("" if _blur_ok() else " (Windows 10 only)")),
             ("gpu_flow_bar", "Draw the Flow bar on the graphics card (smoother, less processor work)"),
             ("whisper_boost", "Whisper mode (boost quiet speech)")))
-        typing = self._card(f, "Typing & Windows")
+        theme = self._card(f, "Theme", "The Flow bar and this window change as soon as you save, no restart "
+                                       "needed. Frutiger Aero is the classic glossy sky blue; Liquid Glass is "
+                                       "clear glass that flows from shape to shape.")
+        self.look_box = _pair_combo(theme, LOOKS, self.cfg.get("look", "aero"), width=22)
+        self._row(theme, 0, "Theme", self.look_box)
+        self.look_mode_box = _pair_combo(theme, LOOK_MODES, self.cfg.get("look_mode", "system"), width=22)
+        self._row(theme, 1, "Liquid Glass colours", self.look_mode_box, "Light or dark glass")
+        self.preview = ttk.Label(theme)
+        self.preview.grid(row=2, column=0, columnspan=3, sticky="w", pady=(self._s(10), 0))
+        for box in (self.look_box, self.look_mode_box):
+            box.bind("<<ComboboxSelected>>", lambda _e: self._preview_look(), add="+")
+        self.win.after(300, self._preview_look)
+        typing = self._card(f, f"Typing & {OS}")
         self._toggles(typing, (
             ("add_trailing_space", "Add a space after each dictation"),
             ("restore_clipboard", "Restore my clipboard after pasting"),
             ("shift_insert_in_editors", "Use Shift+Insert in VS Code / Cursor / Windsurf"),
-            ("launch_at_startup", "Start Aqua Lite when Windows starts"),
+            ("launch_at_startup", "Start Aqua Lite when I log in" if osapi.IS_MAC
+             else "Start Aqua Lite when Windows starts"),
             ("auto_update", "Update automatically when Aqua Lite starts")))
 
     def _ai(self, f):
@@ -1538,9 +1928,11 @@ class SettingsWindow:
         cfg = dict(self.cfg)
         for k, var in self.v.items():
             cfg[k] = var.get().strip() if isinstance(var.get(), str) else var.get()
-        if cfg.get("mic_device") == "(Windows default)":
+        if cfg.get("mic_device") == MIC_DEFAULT:
             cfg["mic_device"] = ""
         cfg["language"] = self.lang.get_key()
+        cfg["look"] = self.look_box.get_key()
+        cfg["look_mode"] = self.look_mode_box.get_key()
         cfg["editing_strength"] = self.strength.get_key()
         cfg["styles"] = {k: cb.get_key() for k, cb in self.style_boxes.items()}
         cfg["dictionary"] = list(self.dict_list.get(0, "end"))
@@ -1578,14 +1970,13 @@ class SettingsWindow:
             return
         self.app.apply_settings(cfg)
         self.status.configure(text="Saved")
+        if look_key(cfg) != self.look:   # new theme: this window is drawn again in it
+            self._rebuild("Saved")
 
 
 def _open_folder(path):
     os.makedirs(path, exist_ok=True)
-    if sys.platform == "win32":
-        os.startfile(path)
-    else:
-        subprocess.Popen(["xdg-open", path])
+    osapi.open_folder(path)
 
 
 def _tree_remove(tree):

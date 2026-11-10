@@ -419,35 +419,16 @@ def paste(text, cfg, target=None, saved=None, queued=0):
 
 
 def restore_budget(delay, queued=0, chars=0):
-    """Longest wait before the old clipboard goes back: the app's usual delay, plus time to work through any
-    queued key presses and to take in a long paste."""
-    return delay + min(15.0, 0.01 * queued + 0.0005 * chars)
+    """Longest wait before the old clipboard goes back (see osapi.common.restore_budget)."""
+    from .osapi import common
+    return common.restore_budget(delay, queued, chars)
 
 
 def _restore_when_pasted(saved, seq, text, delay, budget, check=None, sleep=time.sleep, clock=time.monotonic):
-    """Put the old clipboard back only after the app has pasted. An app reads the clipboard when it gets round
-    to the Ctrl+V, and a long dictation can keep it busy: restoring before that pasted the user's old copy
-    instead of their words. Watches the box for the pasted text; if the box can't be read, waits the full
-    budget. Never restores sooner than the app's usual delay, or if something else was copied meanwhile."""
-    if check is None:
-        from . import instant
-        check = instant.pasted
-    start = clock()
-    seen = None
-    while clock() - start < budget:
-        try:
-            seen = check(text)
-        except Exception:
-            seen = None
-        if seen is not False:
-            break
-        sleep(0.05)
-    elapsed = clock() - start
-    sleep(max(0.0, (delay if seen else budget) - elapsed))
-    if sequence() == seq:  # "Clipboard changed since paste, skipping restoration"
-        restore(saved)
-        return True
-    return False
+    """Put the old clipboard back only after the app has pasted (see osapi.common.restore_when_pasted)."""
+    from .osapi import common
+    return common.restore_when_pasted(saved, seq, text, delay, budget, sequence, restore, check=check, sleep=sleep,
+                                      clock=clock)
 
 
 def copy_selection(timeout=0.5):
@@ -874,6 +855,7 @@ _proto(user32.SetWindowRgn, ctypes.c_int, W.HWND, HANDLE, W.BOOL)
 _proto(gdi32.CreateRoundRectRgn, HANDLE, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
        ctypes.c_int)
 _proto(gdi32.GetStockObject, HANDLE, ctypes.c_int)
+_proto(gdi32.CombineRgn, ctypes.c_int, HANDLE, HANDLE, HANDLE, ctypes.c_int)
 _proto(kernel32.GetModuleHandleW, HANDLE, W.LPCWSTR)
 try:
     _SetWCA = user32.SetWindowCompositionAttribute
@@ -895,13 +877,77 @@ def transparency_on():
         return True
 
 
+def animations_on():
+    """Windows' 'Animation effects' switch (Settings > Accessibility > Visual effects)."""
+    on = W.BOOL(True)
+    try:
+        if user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(on), 0):   # SPI_GETCLIENTAREAANIMATION
+            return bool(on.value)
+    except (AttributeError, OSError):
+        pass
+    return True
+
+
+def apps_light_theme():
+    """Windows' app colour setting (Settings > Personalisation > Colours): True for light, False for dark."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
+            return bool(winreg.QueryValueEx(k, "AppsUseLightTheme")[0])
+    except OSError:
+        return True
+
+
+def watch_theme(callback):
+    """Call callback() (on a background thread) whenever Windows' colour settings change: light/dark apps or
+    transparency effects. Windows wakes the thread, so nothing is polled."""
+    import winreg
+    adv = ctypes.WinDLL("advapi32")
+    adv.RegNotifyChangeKeyValue.restype = ctypes.c_long
+    adv.RegNotifyChangeKeyValue.argtypes = (HANDLE, W.BOOL, W.DWORD, HANDLE, W.BOOL)
+
+    def loop():
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                 r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        except OSError:
+            return
+        ev = kernel32.CreateEventW(None, False, False, None)
+        while adv.RegNotifyChangeKeyValue(int(key), False, 0x4, ev, True) == 0:   # REG_NOTIFY_CHANGE_LAST_SET
+            if kernel32.WaitForSingleObject(ev, 0xFFFFFFFF) != 0:
+                break
+            try:
+                callback()
+            except Exception:
+                pass
+    threading.Thread(target=loop, daemon=True, name="theme-watch").start()
+
+
+def dark_title_bar(hwnd, on):
+    """Windows 10 (20H1+) and 11: a dark title bar for a window (DWMWA_USE_IMMERSIVE_DARK_MODE)."""
+    if not dwmapi:
+        return False
+    val = W.BOOL(bool(on))
+    return any(dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(val), 4) == 0 for attr in (20, 19))
+
+
 class Frost:
     """A borderless window that sits right under the Flow bar's glass, shaped like the capsule, and asks Windows
     to blur whatever is behind it. Windows' compositor does the blur on the graphics card, so it costs Aqua Lite
     nothing per frame; the bar's own see-through glass, light and waveform are drawn on top."""
-    TINT = 0x30C87812   # AABBGGRR: a faint sky-blue wash in the blur
+    TINT = 0x30C87812   # AABBGGRR: a faint sky-blue wash in the blur (Frutiger Aero)
 
-    def __init__(self):
+    @staticmethod
+    def shapes_ok():
+        """Windows 10 blurs inside the bar's rounded shape. Windows 11 draws that blur as solid black, and its acrylic
+        blur ignores the shape (a grey rectangle shows round the bar), so there the glass is drawn solid instead."""
+        try:
+            return sys.getwindowsversion().build < 22000
+        except AttributeError:
+            return False
+
+    def __init__(self, tint=None):
         global _frost_class
         if _SetWCA is None:
             raise OSError("this Windows has no blur-behind")
@@ -920,24 +966,41 @@ class Frost:
                                            None, None, inst, None)
         if not self.hwnd:
             raise OSError(ctypes.get_last_error(), "CreateWindowEx failed")
-        policy = _ACCENT_POLICY(3, 2, self.TINT, 0)   # ACCENT_ENABLE_BLURBEHIND, with the tint
+        policy = _ACCENT_POLICY(3, 2, self.TINT if tint is None else tint, 0)   # ACCENT_ENABLE_BLURBEHIND, tinted
         data = _WINCOMPATTRDATA(19, ctypes.addressof(policy), ctypes.sizeof(policy))
         if not _SetWCA(self.hwnd, ctypes.byref(data)):
             user32.DestroyWindow(self.hwnd)
             raise OSError("blur-behind was refused")
         self.shape, self.rect, self.visible = None, None, False
 
-    def place(self, above, x, y, w, h, radius, clip_bottom=None):
+    def place(self, above, x, y, w, h, radius, clip_bottom=None, extra=()):
         """Put the blur under window `above` at (x, y, w, h) on screen, rounded by `radius`; anything below
-        clip_bottom is left out (the bar tucks under the screen edge when it slides)."""
+        clip_bottom is left out (the bar tucks under the screen edge when it slides). extra: more rounded
+        shapes (x, y, w, h, radius) on screen to blur as well, such as a bubble above the bar."""
+        if extra:
+            x0, y0 = min([x] + [e[0] for e in extra]), min([y] + [e[1] for e in extra])
+            x1 = max([x + w] + [e[0] + e[2] for e in extra])
+            y1 = max([y + h] + [e[1] + e[3] for e in extra])
+            parts = tuple((sx - x0, sy - y0, sw, sh, sr)
+                          for sx, sy, sw, sh, sr in ((x, y, w, h, radius),) + tuple(extra))
+            x, y, w, h = x0, y0, x1 - x0, y1 - y0
+        else:
+            parts = ((0, 0, w, h, radius),)
         vis_h = h if clip_bottom is None else min(h, clip_bottom - y)
         if vis_h <= 2 or w <= 2:
             self.hide()
             return
-        shape = (w, h, radius)
+        shape = (w, h, parts)
         if shape != self.shape:
-            d = max(2, 2 * radius)
-            rgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, d, d)
+            rgn = None
+            for px, py, pw, ph, pr in parts:
+                d = max(2, 2 * pr)
+                part = gdi32.CreateRoundRectRgn(px, py, px + pw + 1, py + ph + 1, d, d)
+                if rgn is None:
+                    rgn = part
+                else:
+                    gdi32.CombineRgn(rgn, rgn, part, 2)   # RGN_OR
+                    gdi32.DeleteObject(part)
             if user32.SetWindowRgn(self.hwnd, rgn, True):
                 self.shape = shape
             else:

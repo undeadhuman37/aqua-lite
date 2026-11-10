@@ -704,40 +704,13 @@ class DeepgramStreamer(LiveTyper):
                  self.sent, len(self.finals), len(self.typed))
 
 
-# ---------------------------------------------------------------- checking before replacing (Windows)
+# ---------------------------------------------------------------- checking before replacing
 def text_before_caret(n):
-    """Up to `n` characters right before the cursor in the focused box, through UI Automation.
-    Returns (text, exact): exact=False when only the whole box text was readable (cursor assumed at the end),
-    or (None, False) if it can't be read (or it's a password box)."""
-    comtypes = None
-    try:
-        from . import learn
-        comtypes, U, uia = learn._uia()
-        el = uia.GetFocusedElement()
-        if not el or el.CurrentIsPassword:
-            return None, False
-        pat = el.GetCurrentPattern(10014)  # TextPattern
-        if pat:
-            tp = pat.QueryInterface(U.IUIAutomationTextPattern)
-            sel = tp.GetSelection()
-            if sel and sel.Length > 0:
-                r = sel.GetElement(0).Clone()
-                r.MoveEndpointByRange(1, r, 0)            # collapse to the cursor (End -> Start)
-                r.MoveEndpointByUnit(0, 0, -(n + 64))     # Start back by characters
-                return (r.GetText(-1) or "").replace("\r\n", "\n"), True
-        pat = el.GetCurrentPattern(10002)  # ValuePattern
-        if pat:
-            value = pat.QueryInterface(U.IUIAutomationValuePattern).CurrentValue or ""
-            return value.replace("\r\n", "\n"), False
-    except Exception as e:
-        log.info("instant text: couldn't read the box: %s", e)
-    finally:
-        if comtypes is not None:
-            try:
-                comtypes.CoUninitialize()
-            except Exception:
-                pass
-    return None, False
+    """Up to `n` characters right before the cursor in the focused box (Windows: UI Automation, macOS:
+    Accessibility). Returns (text, exact): exact=False when only the whole box text was readable (cursor assumed
+    at the end), or (None, False) if it can't be read (or it's a password box)."""
+    from . import osapi
+    return osapi.text_before_caret(n)
 
 
 def _norm(text):
@@ -746,30 +719,9 @@ def _norm(text):
 
 
 def selected_text():
-    """The selected text in the focused box (UI Automation), or None if it can't be read."""
-    comtypes = None
-    try:
-        from . import learn
-        comtypes, U, uia = learn._uia()
-        el = uia.GetFocusedElement()
-        if not el or el.CurrentIsPassword:
-            return None
-        pat = el.GetCurrentPattern(10014)  # TextPattern
-        if not pat:
-            return None
-        sel = pat.QueryInterface(U.IUIAutomationTextPattern).GetSelection()
-        if not sel or sel.Length <= 0:
-            return None
-        return sel.GetElement(0).GetText(-1) or ""
-    except Exception as e:
-        log.info("instant text: couldn't read the selection: %s", e)
-        return None
-    finally:
-        if comtypes is not None:
-            try:
-                comtypes.CoUninitialize()
-            except Exception:
-                pass
+    """The selected text in the focused box, or None if it can't be read."""
+    from . import osapi
+    return osapi.selected_text()
 
 
 def wait_selected(typed, timeout, read=None, clock=time.monotonic, sleep=time.sleep):
@@ -808,20 +760,8 @@ def pasted(text, read=None):
 
 
 def is_password_box():
-    comtypes = None
-    try:
-        from . import learn
-        comtypes, _U, uia = learn._uia()
-        el = uia.GetFocusedElement()
-        return bool(el and el.CurrentIsPassword)
-    except Exception:
-        return False
-    finally:
-        if comtypes is not None:
-            try:
-                comtypes.CoUninitialize()
-            except Exception:
-                pass
+    from . import osapi
+    return osapi.is_password_box()
 
 
 def safe_to_replace(typed, before, exact, user_typed):

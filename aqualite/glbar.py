@@ -171,6 +171,77 @@ void main() {
 """
 
 
+# Liquid Glass while it moves (liquid.py): the glass drawn straight from its shape - one or two pills (the bar and
+# its caption bubble) joined with a smooth union, so they melt together as the bubble grows out of the bar. Same
+# layers as liquid.glass_shape: layer 0 = shadow and body (under the contents), layer 1 = shine, rim and fringe.
+LGLASS = """
+#version 330
+in vec2 px;
+uniform vec4 A;             // centre x, centre y, half width, half height (canvas pixels)
+uniform vec4 B;             // the second pill (the bubble), used when b_on > 0.5
+uniform float b_on;
+uniform float k;            // how far apart the pills start to melt together
+uniform int layer;
+uniform vec4 body_top;      // straight RGBA 0..1
+uniform vec4 body_bot;
+uniform vec4 tint;
+uniform vec4 edge;
+uniform vec4 core;
+uniform float rim;
+uniform float shine;
+uniform float shadow;
+uniform float fringe;
+uniform float band;
+uniform float rw;
+uniform float u;
+uniform float sh_dy;
+uniform float sh_sigma;
+""" + OUT + """
+float pill(vec2 p, vec4 s) {
+    vec2 q = abs(p - s.xy) - s.zw + s.w;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - s.w;
+}
+float smin(float a, float b, float r) {
+    float h = clamp(0.5 + 0.5 * (b - a) / r, 0.0, 1.0);
+    return mix(b, a, h) - r * h * (1.0 - h);
+}
+float sdf(vec2 p) {
+    float d = pill(p, A);
+    if (b_on > 0.5) d = smin(d, pill(p, B), k);
+    return d;
+}
+float cover(float d) { return clamp(0.5 - d, 0.0, 1.0); }
+float soft(float d, float w) { return smoothstep(-w, w, d); }      // 0 well inside .. 1 well outside
+vec4 pm(vec3 c, float a) { return vec4(c * a, a); }
+vec4 over(vec4 top, vec4 bot) { return top + bot * (1.0 - top.a); }
+void main() {
+    vec2 p = px;
+    float d = sdf(p);
+    vec4 s = (b_on > 0.5 && pill(p, B) < pill(p, A)) ? B : A;
+    vec2 lo = clamp((p - (s.xy - s.zw)) / max(2.0 * s.zw, vec2(1.0)), 0.0, 1.0);   // 0..1 across this pill
+    vec4 col;
+    if (layer == 0) {
+        col = pm(vec3(0.0), shadow * (1.0 - soft(sdf(p - vec2(0.0, sh_dy)), 2.0 * sh_sigma)));
+        vec4 body = mix(body_top, body_bot, lo.y);
+        vec4 b = over(pm(tint.rgb, tint.a), pm(body.rgb, body.a));
+        float e = clamp(soft(d + band, band) - soft(d, band), 0.0, 1.0);
+        b = over(pm(edge.rgb, edge.a * e), b);
+        b = over(pm(core.rgb, core.a * (1.0 - soft(d + band, 1.2 * band))), b);
+        col = over(b * cover(d), col);
+    } else {
+        col = pm(vec3(1.0), shine * clamp(1.0 - lo.y / 0.42, 0.0, 1.0) * cover(d + u));
+        float ring = cover(d) - cover(d + rw);
+        col = over(pm(vec3(1.0), ring * (1.0 - 0.75 * (0.75 * lo.y + 0.25 * lo.x)) * rim), col);
+        float ends = clamp((abs(p.x - s.x) - max(1.0, s.z - s.w)) / max(s.w, 1.0), 0.0, 1.0);
+        col = over(pm(vec3(1.0, 0.353, 0.353), fringe * (cover(d - u) - cover(d)) * ends), col);
+        col = over(pm(vec3(0.353, 0.549, 1.0), fringe * (cover(d + rw) - cover(d + rw + u)) * ends), col);
+    }
+    c0 = col * mask_at(px);
+    c1 = vec4(c0.a);
+}
+"""
+
+
 def _set(prog, **values):
     """Set uniforms; ones a shader doesn't use are compiled away, so skip those."""
     for name, v in values.items():
@@ -194,6 +265,7 @@ class GLBar:
         self.progs["shape"] = c.program(vertex_shader=SHAPE_VERT, fragment_shader=SHAPE)
         import struct
         quad = c.buffer(struct.pack("8f", 0, 0, 1, 0, 0, 1, 1, 1))
+        self.quad = quad
         self.vaos = {name: c.vertex_array(p, [(quad, "2f", "corner")]) for name, p in self.progs.items()
                      if name != "shape"}
         self.shape_cap = 256
@@ -269,6 +341,9 @@ class GLBar:
             if batch:
                 self._shapes(batch, batch_mask)
                 batch = []
+            if kind == "lglass":
+                self._lglass(op, canvas)
+                continue
             if kind == "over":
                 _k, img, x, y, alpha, mask = op
                 cov, mode = None, 0
@@ -294,6 +369,19 @@ class GLBar:
         self.shape_buf.write(a.tobytes())
         self._mask(self.progs["shape"], mask)
         self.vaos["shape"].render(self.mgl.TRIANGLE_STRIP, instances=len(a))
+
+    def _lglass(self, op, canvas):
+        """Liquid Glass drawn from its shape: ("lglass", layer, (pill_a, pill_b or None), params)."""
+        _k, layer, (a, b), params = op
+        if "lglass" not in self.progs:   # built on first use, so Frutiger Aero never depends on it
+            self.progs["lglass"] = self.ctx.program(vertex_shader=VERT, fragment_shader=LGLASS)
+            self.vaos["lglass"] = self.ctx.vertex_array(self.progs["lglass"], [(self.quad, "2f", "corner")])
+        prog = self.progs["lglass"]
+        self._mask(prog, None)
+        _set(prog, mask=2, canvas=canvas, rect=(0, 0) + tuple(canvas), layer=1 if layer == "over" else 0,
+             A=tuple(float(v) for v in a), B=tuple(float(v) for v in (b or (0, 0, 1, 1))), b_on=1.0 if b else 0.0,
+             **{n: (tuple(float(x) for x in v) if isinstance(v, tuple) else float(v)) for n, v in params.items()})
+        self.vaos["lglass"].render(self.mgl.TRIANGLE_STRIP)
 
     def _full(self, name, canvas):
         _set(self.progs[name], rect=(0, 0) + canvas, canvas=canvas)
