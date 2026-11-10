@@ -46,6 +46,19 @@ class Rec:
         self.ev.append(name + ("*" if cmd else ""))
 
 
+def check_files_compile():
+    """Every source file compiles, including the ones the other checks never import (app.py, the Mac layer)."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    files = [os.path.join(root, "AquaLite.pyw")]
+    for dp, _dirs, fs in os.walk(os.path.join(root, "aqualite")):
+        files += [os.path.join(dp, f) for f in fs if f.endswith(".py")]
+    for path in files:
+        with open(path, encoding="utf-8") as f:
+            compile(f.read(), path, "exec")
+    assert len(files) > 30, files
+
+
 def check_hotkeys():
     LC, LW, SP, ALT, D, ESC, Z, SH = 0xA2, 0x5B, 0x20, 0xA4, 0x44, 0x1B, 0x5A, 0xA0
     cfg = {"hotkey_ptt": "ctrl+win"}
@@ -722,7 +735,8 @@ def check_look():
 
 
 def main():
-    for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
+    for name, fn in (("every file compiles", check_files_compile),
+                     ("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
                      ("learning & screen context", check_learning), ("instant text", check_instant), ("paste waits for the app", check_paste_wait), ("instant text tidies each sentence", check_sentence_tidy), ("edit by voice", check_voice_edit),
