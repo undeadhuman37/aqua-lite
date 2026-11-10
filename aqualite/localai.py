@@ -132,7 +132,7 @@ def pick_release(releases, variant):
     if isinstance(releases, dict):
         releases = [releases]
     for rel in releases:
-        if rel.get("draft") or rel.get("prerelease"):
+        if rel.get("draft"):   # (llama.cpp marks every build as a pre-release, so that can't be a reason to skip)
             continue
         try:
             return find_engine_asset(rel, variant)
@@ -146,7 +146,7 @@ def find_engine_asset(release, variant):
     suffix = ENGINES[variant]
     for a in release.get("assets", []):
         name = a.get("name", "")
-        if name.startswith("llama-") and name.endswith(suffix):
+        if name.startswith("llama-") and name.endswith(suffix) and a.get("state", "uploaded") == "uploaded":
             digest = a.get("digest") or ""
             return name, a["browser_download_url"], a.get("size"), (digest[7:] if digest.startswith("sha256:") else None)
     raise LocalAIError(f"no {variant} build in llama.cpp release {release.get('tag_name')}")

@@ -567,6 +567,10 @@ def check_private_mode():
     assert localai.find_engine_asset(rel, "cpu")[1] == "p"
     still_uploading = {"tag_name": "b2", "assets": [{"name": "llama-b2-bin-macos-arm64.zip", "browser_download_url": "m"}]}
     assert localai.pick_release([still_uploading, rel], "vulkan")[1] == "v"           # newest complete release
+    assert localai.pick_release([dict(rel, prerelease=True)], "vulkan")[1] == "v"     # llama.cpp marks all as pre
+    half = {"tag_name": "b3", "assets": [{"name": "llama-b3-bin-win-vulkan-x64.zip", "browser_download_url": "h",
+                                          "state": "starter"}]}
+    assert localai.pick_release([half, rel], "vulkan")[1] == "v"                     # file still uploading
     sib = {"siblings": [{"rfilename": "x-UD-Q4_K_XL.gguf"}, {"rfilename": "x-Q4_K_M.gguf", "lfs": {"sha256": "s", "size": 7}},
                         {"rfilename": "mmproj-x-Q4_K_M.gguf"}, {"rfilename": "x-Q8_0.gguf"}]}
     assert localai.find_model_file(sib, "Q4_K_M") == ("x-Q4_K_M.gguf", 7, "s")
