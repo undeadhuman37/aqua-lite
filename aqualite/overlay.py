@@ -142,9 +142,8 @@ class FlowBar:
         if on and self.frost is None and IS_WIN and self.layered:
             from . import winapi
             try:
-                if winapi.transparency_on():
-                    self.frost = winapi.Frost(getattr(self.r, "frost_tint", None),
-                                              getattr(self.r, "acrylic_tint", None))
+                if winapi.transparency_on() and winapi.Frost.shapes_ok():
+                    self.frost = winapi.Frost(getattr(self.r, "frost_tint", None))
             except Exception:
                 self.frost = None
         elif not on and self.frost is not None:
@@ -244,7 +243,8 @@ class FlowBar:
             self.set_look(self.look, self.look_mode)
         if self.want_frost and IS_WIN and self.layered:
             from . import winapi
-            if winapi.transparency_on() != (self.frost is not None):   # switched on or off: rebuild the blur
+            want = winapi.transparency_on() and winapi.Frost.shapes_ok()
+            if want != (self.frost is not None):   # switched on or off: rebuild the blur
                 if self.frost is not None:
                     self.frost.close()
                     self.frost = None

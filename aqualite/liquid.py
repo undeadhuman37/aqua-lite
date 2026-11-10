@@ -28,7 +28,6 @@ PALETTES = {
         light=(255, 255, 255), light_a=70,
         tint={"recording": (80, 200, 60), "locked": (80, 200, 60), "command": (140, 80, 230)}, tint_a=31,
         frost_tint=0x18FFFFFF,            # AABBGGRR: an almost clear wash in Windows' blur
-        acrylic_tint=0x01A4A4A4,          # Windows 11 acrylic: a little brighter than what's behind
     ),
     "dark": dict(
         frost_body=((40, 42, 50, 70), (40, 42, 50, 52)),
@@ -41,7 +40,6 @@ PALETTES = {
         light=(200, 225, 255), light_a=50,
         tint={"recording": (110, 230, 90), "locked": (110, 230, 90), "command": (170, 120, 255)}, tint_a=38,
         frost_tint=0x14201C1A,
-        acrylic_tint=0x01605854,          # a little darker than what's behind
     ),
 }
 LISTENING = ("recording", "locked", "command")
@@ -285,11 +283,6 @@ class LiquidBarRenderer:
     def frost_tint(self):
         """The wash Windows mixes into its blur behind the bar (winapi.Frost)."""
         return self.pal["frost_tint"]
-
-    @property
-    def acrylic_tint(self):
-        """The same for Windows 11's acrylic blur (its tint sets brightness: grey leaves it as it is)."""
-        return self.pal["acrylic_tint"]
 
     def _u(self, v):
         return int(v * self.scale * SS)

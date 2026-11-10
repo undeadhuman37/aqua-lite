@@ -486,6 +486,17 @@ def _card_restyle(st, w):
     w.configure(style=new)
 
 
+def _blur_ok():
+    """Windows can blur behind the Flow bar's rounded shape (Windows 10; not Windows 11)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        from . import winapi
+        return winapi.Frost.shapes_ok()
+    except Exception:
+        return False
+
+
 def _key_name(k):
     k = k.strip().lower()
     names = {"ctrl": "Ctrl", "win": "Win", "alt": "Alt", "shift": "Shift", "space": "Space", "esc": "Esc",
@@ -1163,7 +1174,8 @@ class SettingsWindow:
             ("double_tap_handsfree", "Tap the shortcut twice for hands-free"),
             ("sounds", "Play start/stop sounds"),
             ("show_idle_bar", "Keep the Flow bar on screen when idle (click it to start hands-free)"),
-            ("frosted_glass", "Frosted glass Flow bar: see-through, with what's behind it softly blurred"),
+            ("frosted_glass", "Frosted glass Flow bar: see-through, with what's behind it softly blurred"
+                              + ("" if _blur_ok() else " (Windows 10 only)")),
             ("gpu_flow_bar", "Draw the Flow bar on the graphics card (smoother, less processor work)"),
             ("whisper_boost", "Whisper mode (boost quiet speech)")))
         theme = self._card(f, "Theme", "The Flow bar and this window change as soon as you save, no restart "

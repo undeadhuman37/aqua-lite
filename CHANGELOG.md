@@ -19,8 +19,8 @@ a new look, words as you talk, and a private mode
   stays on your PC too. Nothing you say leaves it.
 - **Your style, written down:** what Aqua Lite learns from your edits becomes a short style profile per kind of app
   that you can read, change, and take to another PC.
-- **Frosted glass:** the Flow bar softly blurs what's behind it, and follows Windows when you switch light or dark or
-  turn transparency off.
+- **Follows Windows:** Liquid Glass switches light or dark with Windows right away. On Windows 10 the Flow bar
+  softly blurs what's behind it; Windows 11 can't blur a rounded shape, so there the glass is drawn on its own.
 - **Fixes:** long dictations no longer paste your old clipboard, and the Flow bar draws on the graphics card for
   smoother motion with less work for your processor.
 
