@@ -6,7 +6,7 @@ set -uo pipefail
 DEST="$HOME/Library/Application Support/AquaLite"
 
 pkill -f "AquaLite.pyw" 2>/dev/null || true
-rm -rf "$HOME/Applications/Aqua Lite.app" "$DEST/app" "$DEST/app.backup" "$DEST/venv"
+rm -rf "/Applications/Aqua Lite.app" "$HOME/Applications/Aqua Lite.app" "$DEST/app" "$DEST/app.backup" "$DEST/venv"
 rm -f "$HOME/Library/LaunchAgents/com.aqualite.app.plist"
 if [ "${1:-}" = "--all" ]; then
   rm -rf "$DEST"

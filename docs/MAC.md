@@ -1,7 +1,19 @@
 # Aqua Lite on a Mac
 
-Mac support is written but **has never been run on a Mac**. It was built on Windows without one. This page
-says what's done, what has actually been checked, and what a Mac tester should try.
+Mac support was written on Windows without a Mac. It has now had its **first run on a real Mac** (Apple Silicon,
+November 2026): `install-mac.sh` finished, the self-test passed, and push-to-talk typed text into another app. Most
+of the checklist below still needs a tester. This page says what's done, what has been checked, and what to try.
+
+## First Mac run (November 2026)
+
+- Setup needs Python 3.11-3.13. The tester had only 3.14 and 3.15, so setup stopped with a clear message and
+  python.org's 3.12.10 installer fixed it. Setup now checks python.org and Homebrew first and skips Apple's
+  `/usr/bin/python3` stub (running it pops up a "command line tools" install dialog).
+- Setup now stops early if less than 2 GB is free.
+- "Aqua Lite" now goes in the main Applications folder (`/Applications`) when it can be written, instead of the
+  personal one in the home folder, which nobody found.
+- That first dictation was started from Terminal, so macOS may have given the permissions to Terminal rather than
+  to Aqua Lite. Still to check: start from Applications and confirm the permission lists name "Aqua Lite".
 
 ## How it fits together
 

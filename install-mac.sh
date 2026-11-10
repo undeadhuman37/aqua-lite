@@ -10,7 +10,11 @@ SRC="$(pwd)"
 DEST="$HOME/Library/Application Support/AquaLite"
 APPDIR="$DEST/app"
 VENV="$DEST/venv"
-BUNDLE="$HOME/Applications/Aqua Lite.app"
+# the main Applications folder when it can be written (admin accounts can, without a password), so Aqua Lite shows
+# up where people look; otherwise the personal one in the home folder
+if [ -w /Applications ]; then APPS=/Applications; else APPS="$HOME/Applications"; fi
+BUNDLE="$APPS/Aqua Lite.app"
+OLD_BUNDLE="$HOME/Applications/Aqua Lite.app"   # where earlier test builds put it
 
 echo
 echo "  ================================================"
@@ -24,9 +28,15 @@ pkill -f "AquaLite.pyw" 2>/dev/null || true
 # ---- 1. find Python 3.11-3.13 with Tk (the python.org installer has both; Homebrew needs python-tk)
 PY=""
 FW=/Library/Frameworks/Python.framework/Versions   # python.org installs here, even before PATH is updated
-for cand in python3.12 python3.13 python3.11 python3 "$FW/3.12/bin/python3" "$FW/3.13/bin/python3" \
-    "$FW/3.11/bin/python3" /opt/homebrew/bin/python3.12 /usr/local/bin/python3.12; do
-  if command -v "$cand" >/dev/null 2>&1 \
+# /usr/bin/python3 is only a stub until Apple's command line tools are installed: running it pops up an install
+# dialog, so it's skipped unless they're there (it's Python 3.9 anyway, too old).
+has_clt() { xcode-select -p >/dev/null 2>&1; }
+usable() { [ "$(command -v "$1" 2>/dev/null)" != /usr/bin/python3 ] || has_clt; }
+for cand in "$FW/3.12/bin/python3" "$FW/3.13/bin/python3" "$FW/3.11/bin/python3" \
+    /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.11 \
+    /usr/local/bin/python3.12 /usr/local/bin/python3.13 /usr/local/bin/python3.11 \
+    python3.12 python3.13 python3.11 python3; do
+  if command -v "$cand" >/dev/null 2>&1 && usable "$cand" \
       && "$cand" -c "import sys, tkinter; assert (3, 11) <= sys.version_info[:2] <= (3, 13)" >/dev/null 2>&1; then
     PY="$(command -v "$cand")"
     break
@@ -34,8 +44,8 @@ for cand in python3.12 python3.13 python3.11 python3 "$FW/3.12/bin/python3" "$FW
 done
 if [ -z "$PY" ]; then
   echo "  Python 3.11, 3.12 or 3.13 with Tk wasn't found."
-  for cand in python3 "$FW"/*/bin/python3; do
-    command -v "$cand" >/dev/null 2>&1 || continue
+  for cand in python3 "$FW"/*/bin/python3 /opt/homebrew/bin/python3; do
+    if ! command -v "$cand" >/dev/null 2>&1 || ! usable "$cand"; then continue; fi
     echo "  Found: $cand -> $("$cand" -c 'import sys; print(sys.version.split()[0])' 2>/dev/null)" \
       "$("$cand" -c 'import tkinter' >/dev/null 2>&1 && echo '(with Tk)' || echo '(no Tk)')"
   done
@@ -44,6 +54,13 @@ if [ -z "$PY" ]; then
   exit 1
 fi
 echo "[1/5] Using Python: $PY"
+
+# ---- enough room? packages take about 1 GB, the offline speech model another 0.5-3 GB later
+FREE_GB=$(df -g "$HOME" | awk 'NR==2 {print $4}')
+if [ -n "$FREE_GB" ] && [ "$FREE_GB" -lt 2 ]; then
+  echo "  Only ${FREE_GB} GB free on this Mac. Aqua Lite needs about 2 GB: free some space, then run this again."
+  exit 1
+fi
 
 # ---- 2. copy the app
 echo "[2/5] Copying Aqua Lite to $APPDIR"
@@ -77,7 +94,10 @@ fi
 
 # ---- 5. "Aqua Lite" in Applications: a small app that starts the private Python. macOS gives permissions
 #         (Accessibility, Input Monitoring, Microphone) to this app, not to Terminal.
-echo "[5/5] Adding Aqua Lite to $HOME/Applications"
+echo "[5/5] Adding Aqua Lite to $APPS"
+if [ "$BUNDLE" != "$OLD_BUNDLE" ] && [ -d "$OLD_BUNDLE" ]; then
+  rm -rf "$OLD_BUNDLE"   # one copy only, or Spotlight shows two and permissions go to the wrong one
+fi
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cat > "$BUNDLE/Contents/MacOS/Aqua Lite" <<LAUNCH
 #!/bin/bash

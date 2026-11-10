@@ -1,7 +1,8 @@
 # Aqua Lite - notes for Claude Code
 
 Aqua Lite is a free, open-source voice dictation app (a Wispr Flow-style tool) for Windows, with a first macOS port
-(untested on a real Mac). Styled Frutiger Aero: glossy sky-blue glass (optional Liquid Glass theme). Python with Tk/ttk
+(first real-Mac install and dictation worked; most of `docs/MAC.md`'s checklist is still untested). Styled Frutiger
+Aero: glossy sky-blue glass (optional Liquid Glass theme). Python with Tk/ttk
 and Pillow; the Flow bar can also draw through OpenGL (moderngl).
 
 ## Rules
