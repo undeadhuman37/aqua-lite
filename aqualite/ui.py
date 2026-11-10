@@ -250,7 +250,8 @@ def _make_elements(st, root, sc):
     pill_b = (s(11), s(5), s(11), s(5))
     for name, (fill, _ink) in SKIN.PILLS.items():
         im = _flat(_grow(SKIN.pill(s(40), s(22), fill), pill_b, w=s(300)), SKIN.CARD)
-        el(f"{PREFIX}.pill.{name}", P(f"pill_{name}", im), border=pill_b, padding=(s(10), s(2), s(10), s(3)),
+        pad_l, pad_r = (s(10), s(10)) if PREFIX == "Aero" else (s(18), s(4))   # Liquid Glass: a dot, then text
+        el(f"{PREFIX}.pill.{name}", P(f"pill_{name}", im), border=pill_b, padding=(pad_l, s(2), pad_r, s(3)),
            sticky="nsew", width=s(40), height=s(22))
     key_b = (s(7), s(5), s(7), s(8))
     el(f"{PREFIX}.key", P("key", _flat(_grow(SKIN.keycap(s(28), s(24)), key_b, w=s(240)), SKIN.CARD)), border=key_b,
@@ -414,11 +415,11 @@ def apply_liquid_style(win):
         _make_elements(st, win._root(), sc)
     st.configure("TFrame", background=PAGE)
     st.configure("TLabel", background=PAGE, foreground=INK)
-    for name, extra in (("H1.TLabel", dict(font=("Segoe UI Semibold", 21))),
+    for name, extra in (("H1.TLabel", dict(font=("Segoe UI", 24))),
                         ("Sub.TLabel", dict(font=("Segoe UI", 11), foreground=MUTED)),
                         ("CardHead.TLabel", dict(font=(semi, 11))), ("Strong.TLabel", dict(font=(semi, 10))),
                         ("Eyebrow.TLabel", dict(font=(semi, 9), foreground=C["eyebrow"])),
-                        ("Stat.TLabel", dict(font=(semi, 22), foreground=ACCENT)),
+                        ("Stat.TLabel", dict(font=("Segoe UI", 26), foreground=INK)),
                         ("Muted.TLabel", dict(foreground=MUTED)), ("Warn.TLabel", dict(foreground=C["warn"]))):
         st.configure(name, **extra)
     for name in CONTAINERS[:3]:
@@ -458,7 +459,7 @@ def apply_liquid_style(win):
         sty = f"{name.title()}Pill.TLabel"
         st.layout(sty, [(f"{PREFIX}.pill.{name}", {"sticky": "nsew", "children": [
             ("Label.label", {"sticky": "nsew"})]})])
-        st.configure(sty, foreground=skin.hexrgb(ink), font=(semi, 9), background=CARD)
+        st.configure(sty, foreground=skin.hexrgb(ink), font=("Segoe UI", 10), background=CARD)
     st.layout("Key.TLabel", [(f"{PREFIX}.key", {"sticky": "nsew", "children": [("Label.label", {"sticky": "nsew"})]})])
     st.configure("Key.TLabel", font=("Consolas", 10, "bold"), foreground=INK, background=CARD)
     st.configure("TLabelframe", background=PAGE, bordercolor=C["line"])
@@ -708,7 +709,8 @@ class SettingsWindow:
         cv.create_text(x + s(42), y + s(1), text=APP_NAME, anchor="nw", font=("Segoe UI Semibold", 13), fill=INK)
         cv.create_text(x + s(42), y + s(21), text="Settings", anchor="nw", font=("Segoe UI", 9), fill=MUTED)
         y += s(58)
-        pw, ph = sw - s(24), s(38)
+        inset = s(16) if self.glide else s(12)
+        pw, ph = sw - 2 * inset, s(36) if self.glide else s(38)
         sel_img, hot_img = P(SKIN.nav_pill(pw, ph, "selected")), P(SKIN.nav_pill(pw, ph, "hover"))
         self._sel_img = sel_img
         self.nav, group = [], None
@@ -716,12 +718,12 @@ class SettingsWindow:
         for i, (g, name, ic, _b) in enumerate(PAGES):
             if g != group:
                 group = g
-                y += s(10) if i else 0
+                y += (s(22) if self.glide else s(10)) if i else 0
                 cv.create_text(s(24), y, text=g, anchor="nw", font=("Segoe UI Semibold", 9), fill=C["nav_group"])
                 y += s(19)
             item = {"y0": y, "y1": y + ph,
-                    "hot": cv.create_image(s(12), y, image=hot_img, anchor="nw", state="hidden"),
-                    "sel": cv.create_image(s(12), y, image=sel_img, anchor="nw", state="hidden"),
+                    "hot": cv.create_image(inset, y, image=hot_img, anchor="nw", state="hidden"),
+                    "sel": cv.create_image(inset, y, image=sel_img, anchor="nw", state="hidden"),
                     "icons": (P(SKIN.icon(ic, s(18), SKIN.INK)), P(SKIN.icon(ic, s(18), C["nav_on_icon"])))}
             item["icon"] = cv.create_image(s(28), y + mid, image=item["icons"][0], anchor="w")
             item["shade"] = cv.create_text(s(56), y + mid + 1, text=name, anchor="w", fill=C["nav_shade"] or INK,
@@ -736,7 +738,8 @@ class SettingsWindow:
                                         font=("Segoe UI", 9, "underline"), fill=ACCENT)
         self.side_hot, self.side_sel = None, None
         # Liquid Glass: one bead of glass that glides from page to page on a spring
-        self.bead = cv.create_image(s(12), self.nav[0]["y0"], image=sel_img, anchor="nw", state="hidden")
+        self.bead_x = inset
+        self.bead = cv.create_image(inset, self.nav[0]["y0"], image=sel_img, anchor="nw", state="hidden")
         self.bead_spring, self.bead_job, self.bead_t = None, None, 0.0
         cv.bind("<Configure>", self._side_resize)
         cv.bind("<Motion>", self._side_motion)
@@ -818,8 +821,8 @@ class SettingsWindow:
         from . import liquid
         cv = self.side
         if self.bead_spring is None or not cv.winfo_ismapped():
-            self.bead_spring = liquid.Spring(y, response=0.34, damping=0.74)
-            cv.coords(self.bead, self._s(12), y)
+            self.bead_spring = liquid.Spring(y, response=0.32, damping=0.85)   # a small bounce
+            cv.coords(self.bead, self.bead_x, y)
             cv.itemconfigure(self.bead, state="normal")
             cv.tag_lower(self.bead)
             cv.tag_raise(self.bead, self.side_bg)
@@ -835,7 +838,7 @@ class SettingsWindow:
         sp = self.bead_spring
         sp.step(dt)
         try:
-            self.side.coords(self.bead, self._s(12), sp.x)
+            self.side.coords(self.bead, self.bead_x, sp.x)
         except tk.TclError:
             self.bead_job = None
             return

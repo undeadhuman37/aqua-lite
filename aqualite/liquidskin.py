@@ -1,54 +1,54 @@
 """Liquid Glass pieces for the Settings window, in light and dark: glass buttons, switches, fields, sliders, cards,
-and a sidebar that is a sheet of glass over soft colour.
+and a sidebar that is one quiet sheet of glass on the page colour.
 
 The counterpart of skin.py (Frutiger Aero), which stays as it is. Skin(mode) has the same names as the skin module
 (PAGE, CARD, INK, button(), toggle(), card(), sidebar()...), so ui.py can take either. Everything is drawn once with
 Pillow, oversampled, at the screen's scale, and laid on a solid surface (see ui._flat for why).
 """
-import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from .skin import K, _canvas, _fill, _lerp, _mask, _shrink, _vgrad, hexrgb
 from .skin import icon as _icon
 
-PALETTES = {
+PALETTES = {   # graphite neutrals; colour lives in the Flow bar preview, the accent and the green listening dot
     "light": dict(
-        PAGE=(242, 243, 247), CARD=(255, 255, 255), CARD_LINE=(226, 228, 234),
-        INK=(29, 29, 31), MUTED=(99, 103, 112), ACCENT=(0, 122, 255), ACCENT_TEXT=(0, 102, 204),
-        FIELD=(244, 245, 248), FIELD_LINE=(214, 217, 224), FIELD_OFF=(236, 237, 241),
-        GREEN=(52, 199, 89), TRACK=(226, 227, 232), KNOB_RIM=(0, 0, 0, 22),
-        BUTTON=((255, 255, 255), (246, 247, 250)), RIM=(0, 0, 0, 24), SHINE=(255, 255, 255, 230), SHADOW=34,
-        THUMB=((196, 199, 206), (168, 172, 180), (138, 142, 151)),
-        BLOBS=(((110, 175, 255), 0.85), ((200, 150, 255), 0.70), ((100, 215, 195), 0.60), ((255, 180, 140), 0.50)),
-        BACK=((236, 240, 248), (242, 238, 248)), SHEET=(255, 255, 255, 140), SHEET_RIM=235,
-        NAV_ON=(255, 255, 255, 225), NAV_HOT=(255, 255, 255, 105), NAV_RIM=(255, 255, 255, 255),
-        KEY=((252, 252, 253), (238, 239, 243), (200, 203, 211)),
-        PILLS={"blue": ((226, 238, 255), (0, 84, 180)), "green": ((222, 245, 228), (22, 112, 46)),
-               "violet": ((240, 233, 255), (104, 56, 186)), "amber": ((255, 241, 220), (138, 78, 0))},
-        ui=dict(eyebrow=(99, 103, 112), warn=(168, 80, 0), line=(226, 228, 234), disabled_fg=(160, 163, 170),
-                select=(207, 226, 255), btn_ink=(29, 29, 31), primary_ink=(255, 255, 255),
-                primary_dis=(232, 238, 248), list_bg=(255, 255, 255), head_bg=(246, 247, 250),
-                head_hot=(236, 238, 243), nav_group=(110, 114, 124), nav_on_ink=(29, 29, 31),
-                nav_on_icon=(0, 122, 255), title=((240, 241, 246), (29, 29, 31), (222, 224, 230)), dark_title=False),
+        PAGE=(242, 242, 244), CARD=(255, 255, 255), CARD_LINE=(228, 228, 232),
+        INK=(23, 23, 25), MUTED=(100, 100, 106), ACCENT=(0, 122, 255), ACCENT_TEXT=(0, 102, 204),
+        FIELD=(245, 245, 247), FIELD_LINE=(216, 216, 222), FIELD_OFF=(238, 238, 241),
+        GREEN=(52, 199, 89), TRACK=(226, 226, 230), KNOB_RIM=(0, 0, 0, 22),
+        BUTTON=((255, 255, 255), (247, 247, 249)), RIM=(0, 0, 0, 24), SHINE=(255, 255, 255, 230), SHADOW=30,
+        THUMB=((198, 198, 204), (170, 170, 177), (140, 140, 148)),
+        SHEET=(249, 249, 250), SHEET_LINE=(0, 0, 0, 16), SHEET_RIM=255,
+        NAV_ON=(255, 255, 255, 255), NAV_LINE=(0, 0, 0, 18), NAV_HOT=(0, 0, 0, 10), NAV_RIM=(255, 255, 255, 255),
+        SKY=((205, 220, 238), (236, 241, 247)),   # the little desktop behind the Flow bar preview
+        KEY=((252, 252, 253), (239, 239, 242), (202, 202, 209)),
+        PILLS={"blue": ((150, 150, 158), (60, 60, 66)), "green": ((52, 199, 89), (60, 60, 66)),
+               "violet": ((150, 150, 158), (60, 60, 66)), "amber": ((230, 150, 30), (60, 60, 66))},
+        ui=dict(eyebrow=(100, 100, 106), warn=(160, 82, 0), line=(228, 228, 232), disabled_fg=(162, 162, 168),
+                select=(210, 228, 255), btn_ink=(23, 23, 25), primary_ink=(255, 255, 255),
+                primary_dis=(232, 238, 248), list_bg=(255, 255, 255), head_bg=(247, 247, 249),
+                head_hot=(238, 238, 241), nav_group=(110, 110, 116), nav_on_ink=(23, 23, 25),
+                nav_on_icon=(0, 122, 255), title=((242, 242, 244), (23, 23, 25), (224, 224, 228)), dark_title=False),
     ),
     "dark": dict(
-        PAGE=(24, 25, 29), CARD=(38, 39, 44), CARD_LINE=(56, 58, 65),
-        INK=(242, 242, 247), MUTED=(160, 164, 174), ACCENT=(10, 132, 255), ACCENT_TEXT=(100, 175, 255),
-        FIELD=(50, 51, 57), FIELD_LINE=(72, 74, 82), FIELD_OFF=(44, 45, 50),
-        GREEN=(48, 209, 88), TRACK=(66, 67, 74), KNOB_RIM=(0, 0, 0, 60),
-        BUTTON=((76, 77, 85), (62, 63, 70)), RIM=(255, 255, 255, 30), SHINE=(255, 255, 255, 70), SHADOW=90,
-        THUMB=((78, 80, 88), (102, 105, 114), (128, 131, 141)),
-        BLOBS=(((40, 90, 200), 0.55), ((120, 60, 190), 0.45), ((20, 130, 120), 0.38), ((160, 80, 60), 0.25)),
-        BACK=((18, 20, 28), (24, 20, 30)), SHEET=(36, 38, 46, 165), SHEET_RIM=120,
-        NAV_ON=(255, 255, 255, 40), NAV_HOT=(255, 255, 255, 18), NAV_RIM=(255, 255, 255, 70),
-        KEY=((74, 75, 83), (62, 63, 70), (26, 27, 31)),
-        PILLS={"blue": ((22, 46, 82), (130, 186, 255)), "green": ((22, 58, 34), (110, 215, 140)),
-               "violet": ((50, 36, 82), (198, 166, 255)), "amber": ((70, 48, 16), (255, 192, 96))},
-        ui=dict(eyebrow=(160, 164, 174), warn=(255, 172, 72), line=(52, 54, 60), disabled_fg=(104, 107, 115),
-                select=(28, 70, 132), btn_ink=(242, 242, 247), primary_ink=(255, 255, 255),
-                primary_dis=(120, 140, 170), list_bg=(30, 31, 36), head_bg=(46, 47, 53), head_hot=(56, 57, 64),
-                nav_group=(150, 154, 164), nav_on_ink=(255, 255, 255), nav_on_icon=(100, 175, 255),
-                title=((30, 31, 36), (242, 242, 247), (52, 54, 60)), dark_title=True),
+        PAGE=(20, 20, 21), CARD=(29, 29, 31), CARD_LINE=(44, 44, 47),
+        INK=(237, 237, 237), MUTED=(161, 161, 166), ACCENT=(10, 132, 255), ACCENT_TEXT=(100, 175, 255),
+        FIELD=(38, 38, 41), FIELD_LINE=(60, 60, 64), FIELD_OFF=(33, 33, 35),
+        GREEN=(48, 209, 88), TRACK=(58, 58, 62), KNOB_RIM=(0, 0, 0, 60),
+        BUTTON=((56, 56, 60), (46, 46, 50)), RIM=(255, 255, 255, 26), SHINE=(255, 255, 255, 60), SHADOW=80,
+        THUMB=((70, 70, 75), (95, 95, 101), (122, 122, 129)),
+        SHEET=(27, 27, 29), SHEET_LINE=(255, 255, 255, 20), SHEET_RIM=60,
+        NAV_ON=(255, 255, 255, 26), NAV_LINE=(255, 255, 255, 0), NAV_HOT=(255, 255, 255, 12),
+        NAV_RIM=(255, 255, 255, 46),
+        SKY=((28, 34, 46), (16, 18, 24)),
+        KEY=((58, 58, 62), (48, 48, 52), (16, 16, 18)),
+        PILLS={"blue": ((110, 110, 118), (200, 200, 205)), "green": ((48, 209, 88), (200, 200, 205)),
+               "violet": ((110, 110, 118), (200, 200, 205)), "amber": ((240, 165, 50), (200, 200, 205))},
+        ui=dict(eyebrow=(161, 161, 166), warn=(240, 165, 72), line=(44, 44, 47), disabled_fg=(100, 100, 106),
+                select=(24, 62, 120), btn_ink=(237, 237, 237), primary_ink=(255, 255, 255),
+                primary_dis=(110, 130, 160), list_bg=(24, 24, 26), head_bg=(33, 33, 35), head_hot=(42, 42, 45),
+                nav_group=(140, 140, 146), nav_on_ink=(255, 255, 255), nav_on_icon=(100, 175, 255),
+                title=((20, 20, 21), (237, 237, 237), (44, 44, 47)), dark_title=True),
     ),
 }
 
@@ -92,7 +92,7 @@ class Skin:
         self.mode = mode if mode in PALETTES else "light"
         for k, v in PALETTES[self.mode].items():
             setattr(self, k, v)
-        self.SIDEBAR = (self.BACK[0], self.BACK[1])
+        self.SIDEBAR = (self.PAGE, self.PAGE)
         self.hexrgb = hexrgb
 
     # ------------------------------------------------------------ buttons
@@ -256,72 +256,36 @@ class Skin:
 
     # ------------------------------------------------------------ sidebar
     def backdrop(self, w, h):
-        """Soft colour behind the sidebar's glass: a pale wash with a few big blurred blobs."""
-        img = _vgrad(w, h, [(0, self.BACK[0]), (1, self.BACK[1])]).convert("RGB")
-        u = w / 224.0
-        spots = ((0.15, 0.10, 120), (0.95, 0.38, 130), (0.10, 0.72, 140), (0.85, 0.95, 120))
-        for (col, a), (fx, fy, rr) in zip(self.BLOBS, spots):
-            m = Image.new("L", (w, h), 0)
-            r = rr * u
-            cx, cy = fx * w, fy * h
-            ImageDraw.Draw(m).ellipse((cx - r, cy - r, cx + r, cy + r), fill=int(255 * a))
-            m = m.filter(ImageFilter.GaussianBlur(r * 0.55))
-            img = Image.composite(Image.new("RGB", (w, h), col), img, m)
-        return img
+        """The little desktop behind the Flow bar preview: plain daylight (or night) sky, one tone shift."""
+        return _vgrad(w, h, [(0, self.SKY[0]), (1, self.SKY[1])]).convert("RGB")
 
     def sidebar(self, w, h):
-        """A sheet of glass floating over the backdrop: the colour behind it blurred and washed, bent outwards at
-        its rounded edge (refraction, computed once per size), with a bright rim and a soft shadow."""
+        """One sheet of glass on the page colour: a quiet raised panel with a hairline, a soft top highlight and a
+        soft shadow."""
         u = w / 224.0
-        back = self.backdrop(w, h)
-        m = int(round(9 * u))
+        m = int(round(8 * u))
         box = (m, m, w - m, h - m)
-        r = int(round(18 * u))
-        out = back.convert("RGBA")
-        _shadow(out, box, r, 8 * u, self.SHADOW // 2, dy=int(3 * u))
-        blurred = np.asarray(back.filter(ImageFilter.GaussianBlur(14 * u)), dtype=np.float32)
-        # signed distance to the rounded box (negative inside), then the edge band bends the view outwards
-        ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
-        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
-        bx, by = (box[2] - box[0]) / 2 - r, (box[3] - box[1]) / 2 - r
-        qx, qy = np.abs(xs - cx) - bx, np.abs(ys - cy) - by
-        d = np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - r
-        band = 16 * u
-        k = np.clip(1 + d / band, 0, 1)
-        k = k * k * (3 - 2 * k)
-        gy, gx = np.gradient(d)
-        n = np.hypot(gx, gy) + 1e-6
-        strength = 10 * u
-        sx = np.clip(xs - gx / n * strength * k, 0, w - 1).astype(np.int32)
-        sy = np.clip(ys - gy / n * strength * k, 0, h - 1).astype(np.int32)
-        glass = blurred[sy, sx]
-        wash = np.array(self.SHEET[:3], dtype=np.float32)
-        a = self.SHEET[3] / 255.0
-        glass = glass * (1 - a) + wash * a
-        glass += (k[..., None] * (14 if self.mode == "light" else 10))   # a brighter band where the glass is thick
-        sheet = Image.fromarray(np.clip(glass, 0, 255).astype(np.uint8), "RGB").convert("RGBA")
-        shape = _mask((w, h), box, r)
-        out.paste(sheet, (0, 0), shape)
-        # shine across the top and the rim, lit from above
-        shine = _vgrad(w, int(h * 0.18) + 1, [(0, (255, 255, 255, 60 if self.mode == "light" else 22)),
-                                              (1, (255, 255, 255, 0))])
-        top = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        top.paste(shine, (0, m))
-        top.putalpha(ImageChops.multiply(top.getchannel("A"), shape))
-        out.alpha_composite(top)
-        _rim(out, box, r, (255, 255, 255, self.SHEET_RIM), (255, 255, 255, self.SHEET_RIM // 4),
-             width=max(1, int(round(u))))
+        r = int(round(20 * u))
+        out = Image.new("RGBA", (w, h), self.PAGE + (255,))
+        _shadow(out, box, r, 6 * u, self.SHADOW // 3, dy=int(2 * u))
+        ImageDraw.Draw(out).rounded_rectangle(box, radius=r, fill=self.SHEET + (255,))
+        line = Image.new("RGBA", (w, h), (0, 0, 0, 0))   # the hairline is see-through: blend it, don't paint it
+        ImageDraw.Draw(line).rounded_rectangle(box, radius=r, outline=self.SHEET_LINE, width=max(1, int(round(u))))
+        out.alpha_composite(line)
+        _rim(out, (box[0] + 1, box[1] + 1, box[2] - 1, box[3] - 1), r - 1, (255, 255, 255, self.SHEET_RIM),
+             (255, 255, 255, 0), width=max(1, int(round(u))))
         return out.convert("RGB")
 
     def nav_pill(self, w, h, kind):
         """kind: 'selected' (a lighter bead of glass) or 'hover' (a faint one)."""
         img = _canvas(w, h)
         box = (K, K, w * K - K, h * K - 2 * K)
-        r = 11 * K
+        r = 12 * K   # the sheet's 20 less the 8 between them
         if kind == "selected":
-            _shadow(img, box, r, K * 2, self.SHADOW // 2, dy=K)
-            ImageDraw.Draw(img).rounded_rectangle(box, radius=r, fill=self.NAV_ON)
-            _rim(img, box, r, self.NAV_RIM, tuple(self.NAV_RIM[:3]) + (self.NAV_RIM[3] // 5,), width=K)
+            _shadow(img, box, r, K * 1.5, self.SHADOW // 3, dy=K // 2)
+            ImageDraw.Draw(img).rounded_rectangle(box, radius=r, fill=self.NAV_ON, outline=self.NAV_LINE,
+                                                  width=max(1, K // 2))
+            _rim(img, box, r, self.NAV_RIM, tuple(self.NAV_RIM[:3]) + (0,), width=max(1, K // 2))
         else:
             ImageDraw.Draw(img).rounded_rectangle(box, radius=r, fill=self.NAV_HOT)
         return _shrink(img, w, h)
@@ -331,9 +295,11 @@ class Skin:
 
     # ------------------------------------------------------------ tags and keys
     def pill(self, w, h, fill, behind=None):
+        """A status as quiet text with a small dot in front (the dot colour says on, off or needs attention)."""
         img = Image.new("RGBA", (w * K, h * K), (behind or self.CARD) + (255,))
-        ImageDraw.Draw(img).rounded_rectangle((0, 0, w * K - 1, h * K - 1), radius=(h * K) // 2,
-                                              fill=tuple(fill) + (255,))
+        r = h * K * 0.15
+        cx, cy = h * K * 0.3, h * K / 2
+        ImageDraw.Draw(img).ellipse((cx - r, cy - r, cx + r, cy + r), fill=tuple(fill) + (255,))
         return _shrink(img, w, h)
 
     def keycap(self, w, h, behind=None):

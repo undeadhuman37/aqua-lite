@@ -476,8 +476,10 @@ def check_liquid_settings():
                                     ("warnings", k.ui["warn"], 4.5)):
                 c = _contrast(ink, surface)
                 assert c >= need, f"Liquid Glass {mode}: {name} contrast {c:.1f} < {need}"
-        for fill, ink in k.PILLS.values():
-            assert _contrast(fill, ink) >= 4.5, f"Liquid Glass {mode}: a tag is hard to read"
+        for _dot, ink in k.PILLS.values():   # statuses are text with a dot, straight on the card
+            assert _contrast(k.CARD, ink) >= 4.5, f"Liquid Glass {mode}: a status is hard to read"
+        edge = k.sidebar(224, 600).getpixel((0, 300))   # no colour behind the glass: just the page (and shadow)
+        assert max(abs(a - b) for a, b in zip(edge, k.PAGE)) <= 4, "the sidebar should sit on the page colour"
         side_px = side.getpixel((112, 300))   # the nav text sits on the glass sheet
         assert _contrast(k.INK, side_px) >= 4.5, f"Liquid Glass {mode}: sidebar text contrast too low"
     assert ui.look_key({"look": "liquid", "look_mode": "dark"}) == ("liquid", "dark")
