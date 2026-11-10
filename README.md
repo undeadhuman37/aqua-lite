@@ -125,22 +125,6 @@ In offline mode nothing leaves your PC. With a cloud provider, only the recordin
 you turned that on) go to that provider, using your own API key.
 Settings and history are stored locally in `%APPDATA%\AquaLite`.
 
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-<sub>(Pending approval; until then, releases are unsigned.)</sub>
-
-Only the installer (`AquaLite-Setup-<version>.exe`) is signed. It is built from this repository by
-[GitHub Actions](.github/workflows/installer.yml) on GitHub-hosted runners, and every signing request is approved by hand.
-
-- Committers and reviewers: [undeadhuman37](https://github.com/undeadhuman37)
-- Approvers: [undeadhuman37](https://github.com/undeadhuman37)
-
-Privacy: see [Privacy](#privacy). The program doesn't send information to other networked systems unless you
-ask it to, apart from the update check and model downloads described there, which you can turn off. Third-party
-components keep their own policies: [Groq](https://groq.com/privacy-policy/), [OpenAI](https://openai.com/policies/privacy-policy),
-[Anthropic](https://www.anthropic.com/legal/privacy) and [Hugging Face](https://huggingface.co/privacy) apply only if you use them.
-
 ## How it works
 
 `keyboard hook (WH_KEYBOARD_LL) -> 16 kHz mono mic -> speech-to-text -> AI formatter -> clipboard paste -> clipboard restore`
