@@ -419,35 +419,16 @@ def paste(text, cfg, target=None, saved=None, queued=0):
 
 
 def restore_budget(delay, queued=0, chars=0):
-    """Longest wait before the old clipboard goes back: the app's usual delay, plus time to work through any
-    queued key presses and to take in a long paste."""
-    return delay + min(15.0, 0.01 * queued + 0.0005 * chars)
+    """Longest wait before the old clipboard goes back (see osapi.common.restore_budget)."""
+    from .osapi import common
+    return common.restore_budget(delay, queued, chars)
 
 
 def _restore_when_pasted(saved, seq, text, delay, budget, check=None, sleep=time.sleep, clock=time.monotonic):
-    """Put the old clipboard back only after the app has pasted. An app reads the clipboard when it gets round
-    to the Ctrl+V, and a long dictation can keep it busy: restoring before that pasted the user's old copy
-    instead of their words. Watches the box for the pasted text; if the box can't be read, waits the full
-    budget. Never restores sooner than the app's usual delay, or if something else was copied meanwhile."""
-    if check is None:
-        from . import instant
-        check = instant.pasted
-    start = clock()
-    seen = None
-    while clock() - start < budget:
-        try:
-            seen = check(text)
-        except Exception:
-            seen = None
-        if seen is not False:
-            break
-        sleep(0.05)
-    elapsed = clock() - start
-    sleep(max(0.0, (delay if seen else budget) - elapsed))
-    if sequence() == seq:  # "Clipboard changed since paste, skipping restoration"
-        restore(saved)
-        return True
-    return False
+    """Put the old clipboard back only after the app has pasted (see osapi.common.restore_when_pasted)."""
+    from .osapi import common
+    return common.restore_when_pasted(saved, seq, text, delay, budget, sequence, restore, check=check, sleep=sleep,
+                                      clock=clock)
 
 
 def copy_selection(timeout=0.5):

@@ -170,7 +170,8 @@ def restart(new_version):
 def update_now(on_found=None):
     """Full run. Returns the installed version, or None when already up to date."""
     if not can_self_update():
-        raise UpdateError("this copy isn't an installed copy (run install.bat to install it)")
+        script = "install-mac.sh" if sys.platform == "darwin" else "install.bat"
+        raise UpdateError(f"this copy isn't an installed copy (run {script} to install it)")
     found = check()
     if not found:
         return None

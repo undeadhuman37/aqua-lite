@@ -9,7 +9,6 @@ Each frame is built once as a list of drawing steps (an aero.Scene). The graphic
 Moving parts (light, dot, waveform, words) stay inside the glass's frosted middle, away from the rim.
 """
 import math
-import sys
 
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
@@ -49,13 +48,14 @@ DOTS = {"recording": (52, 199, 89), "command": (175, 82, 222), "ok": (52, 199, 8
 
 
 def resolve_mode(look_mode):
-    """'light', 'dark', or 'system' (follow Windows' app colour setting; light elsewhere) -> 'light' | 'dark'."""
+    """'light', 'dark', or 'system' (follow the Windows / macOS app colour setting; light elsewhere) -> 'light' |
+    'dark'."""
     if look_mode in PALETTES:
         return look_mode
-    if sys.platform == "win32":
+    from . import osapi
+    if osapi.SUPPORTED:
         try:
-            from . import winapi
-            return "light" if winapi.apps_light_theme() else "dark"
+            return "light" if osapi.apps_light_theme() else "dark"
         except Exception:
             pass
     return "light"

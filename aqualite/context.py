@@ -1,14 +1,13 @@
 """Screen context: read the conversation that's visible in the app you're dictating into (a WhatsApp chat, a
 Discord channel, an email thread), so the AI gets names, spellings, topic and tone right.
 
-Off by default (Settings > Style). Read through Windows UI Automation, the accessibility API screen readers use,
-when you start talking. Only what's visible on screen is read; password boxes, private/incognito windows and the
-apps in `context_blocked_apps` are never read. The text is sent to your AI provider together with the dictation
+Off by default (Settings > Style). Read through the accessibility API screen readers use (Windows UI Automation,
+macOS Accessibility; see osapi), when you start talking. Only what's visible on screen is read; password boxes,
+private/incognito windows and the apps in `context_blocked_apps` are never read. The text is sent to your AI provider together with the dictation
 and is never saved or logged.
 """
 import logging
 import re
-import sys
 import threading
 import time
 
@@ -17,8 +16,6 @@ log = logging.getLogger("aqualite")
 MAX_CHARS = 2500        # most recent visible text kept (the bottom of a chat is the newest)
 DRAFT_CHARS = 600       # text already in the box you're typing into
 MAX_ELEMENTS = 4000     # elements looked at, newest last
-UIA_NAME, UIA_TYPE, UIA_OFFSCREEN, UIA_PASSWORD = 30005, 30003, 30022, 30019
-TEXT, LISTITEM = 50020, 50007
 PRIVATE_TITLES = ("inprivate", "incognito", "private browsing", "private window")
 DEFAULT_BLOCKED = ["1password", "bitwarden", "keepass", "keepassxc", "lastpass", "dashlane", "enpass", "keeper",
                    "mstsc", "credentialuibroker", "consent", "logonui"]
@@ -98,7 +95,8 @@ class Grab:
 
 def grab(hwnd, proc, title, cfg):
     """Start reading the window `hwnd` now (call when recording starts). Returns a Grab, or None if not allowed."""
-    if sys.platform != "win32" or not cfg.get("screen_context", False) or not allowed(proc, title, cfg):
+    from . import osapi
+    if not osapi.SUPPORTED or not cfg.get("screen_context", False) or not allowed(proc, title, cfg):
         return None
     g = Grab()
     threading.Thread(target=_run, args=(g, hwnd), daemon=True, name="context").start()
@@ -106,30 +104,11 @@ def grab(hwnd, proc, title, cfg):
 
 
 def _run(g, hwnd):
+    from . import osapi
     t0 = time.perf_counter()
-    comtypes = uia = None
     try:
-        from . import learn
-        comtypes, U, uia = learn._uia()
-        root = uia.ElementFromHandle(hwnd)
-        cr = uia.CreateCacheRequest()
-        for prop in (UIA_NAME, UIA_TYPE, UIA_OFFSCREEN, UIA_PASSWORD):
-            cr.AddProperty(prop)
-        cond = uia.CreateOrCondition(uia.CreatePropertyCondition(UIA_TYPE, TEXT),
-                                     uia.CreatePropertyCondition(UIA_TYPE, LISTITEM))
-        found = root.FindAllBuildCache(4, cond, cr)  # TreeScope_Descendants, one round trip for everything
-        n = found.Length if found else 0
-        names = []
-        for i in range(max(0, n - MAX_ELEMENTS), n):
-            el = found.GetElement(i)
-            try:
-                if el.CachedIsOffscreen or el.CachedIsPassword:
-                    continue
-                names.append(el.CachedName)
-            except Exception:
-                continue
+        names, draft, n = osapi.read_window(hwnd, MAX_ELEMENTS)
         g.text = assemble(names)
-        draft = learn.make_reader(U, uia)() or ""
         g.draft = draft[-DRAFT_CHARS:]
         log.info("context: read %d chars from %d elements in %.2fs", len(g.text), n, time.perf_counter() - t0)
     except ImportError:
@@ -139,9 +118,3 @@ def _run(g, hwnd):
         log.info("context: couldn't read this window: %s", e)
     finally:
         g.done.set()
-        uia = None
-        if comtypes is not None:
-            try:
-                comtypes.CoUninitialize()
-            except Exception:
-                pass

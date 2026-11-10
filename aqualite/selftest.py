@@ -46,6 +46,19 @@ class Rec:
         self.ev.append(name + ("*" if cmd else ""))
 
 
+def check_files_compile():
+    """Every source file compiles, including the ones the other checks never import (app.py, the Mac layer)."""
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    files = [os.path.join(root, "AquaLite.pyw")]
+    for dp, _dirs, fs in os.walk(os.path.join(root, "aqualite")):
+        files += [os.path.join(dp, f) for f in fs if f.endswith(".py")]
+    for path in files:
+        with open(path, encoding="utf-8") as f:
+            compile(f.read(), path, "exec")
+    assert len(files) > 30, files
+
+
 def check_hotkeys():
     LC, LW, SP, ALT, D, ESC, Z, SH = 0xA2, 0x5B, 0x20, 0xA4, 0x44, 0x1B, 0x5A, 0xA0
     cfg = {"hotkey_ptt": "ctrl+win"}
@@ -559,6 +572,22 @@ def check_voice_edit():
 
 def check_private_mode():
     from . import localai
+    engines = localai.ENGINES
+    localai.ENGINES = {"vulkan": "-bin-win-vulkan-x64.zip", "cpu": "-bin-win-cpu-x64.zip"}   # the Windows builds
+    try:
+        _check_private_mode(localai)
+    finally:
+        localai.ENGINES = engines
+    mac = {"tag_name": "b4", "assets": [{"name": "llama-b4-bin-win-cpu-x64.zip", "browser_download_url": "w"},
+                                        {"name": "llama-b4-bin-macos-arm64.zip", "browser_download_url": "a"},
+                                        {"name": "llama-b4-bin-macos-x64.zip", "browser_download_url": "i"}]}
+    if sys.platform == "darwin":
+        assert localai.find_engine_asset(mac, "vulkan")[1] in ("a", "i") and localai.SERVER_EXE == "llama-server"
+    else:
+        assert localai.find_engine_asset(mac, "cpu")[1] == "w" and localai.SERVER_EXE == "llama-server.exe"
+
+
+def _check_private_mode(localai):
     rel = {"tag_name": "b1", "assets": [{"name": "llama-b1-bin-win-cuda-12.4-x64.zip", "browser_download_url": "c"},
                                         {"name": "llama-b1-bin-win-vulkan-x64.zip", "browser_download_url": "v",
                                          "size": 5, "digest": "sha256:ab"},
@@ -578,6 +607,86 @@ def check_private_mode():
     assert "--port" in localai.server_command("e", "m", 1) and "127.0.0.1" in localai.server_command("e", "m", 1)
     assert llm._tidy("<think>x</think>Hello.") == "Hello."
     assert stt.resolve_engine({"private_mode": True, "groq_api_key": "k"}) == "local"
+
+
+def check_platform():
+    """The platform layer (osapi): every system offers the same names, Windows never loads the Mac code, and the
+    Mac layer's pure parts (key codes, Fn, the login item, screen coordinates) work without a Mac."""
+    import ast
+    import os
+    from . import config, osapi
+    from .osapi import common
+    here = os.path.dirname(osapi.__file__)
+
+    def names(mod):
+        tree = ast.parse(open(os.path.join(here, mod + ".py"), encoding="utf-8").read())
+        out = set()
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                out.add(node.name)
+            elif isinstance(node, ast.Assign):
+                out |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+            elif isinstance(node, ast.ImportFrom):
+                out |= {a.asname or a.name for a in node.names}
+        return {n for n in out if not n.startswith("_")}
+    want = names("other") - {"subprocess", "threading"}
+    for mod in ("win", "mac"):
+        missing = want - names(mod)
+        assert not missing, f"osapi/{mod}.py lacks {sorted(missing)}"
+    assert osapi.NAME == {"win32": "win", "darwin": "mac"}.get(sys.platform, "other")
+    if osapi.IS_WIN:
+        osapi.impl()
+        assert "AppKit" not in sys.modules and "Quartz" not in sys.modules, "Windows loaded the Mac libraries"
+    # shared clipboard rules
+    assert common.restore_budget(0.5, 600, 600) > 5 and common.restore_budget(0.5) == 0.5
+    t, put_back, answers = [0.0], [], iter([False, True])
+    assert common.restore_when_pasted("old", 7, "x", 0.5, 5.0, lambda: 7, put_back.append,
+                                      check=lambda _t: next(answers), sleep=lambda d: t.__setitem__(0, t[0] + d),
+                                      clock=lambda: t[0])
+    assert put_back == ["old"] and t[0] >= 0.5
+    assert not common.restore_when_pasted("old", 7, "x", 0.5, 1.0, lambda: 8, put_back.append, check=lambda _t: None,
+                                          sleep=lambda d: None, clock=lambda: 0.0), "restored over a newer copy"
+    assert common.utf16_slice("a😀bc", 1, 3) == "😀" and common.utf16_len("a😀") == 3
+    # the Mac layer imports anywhere (PyObjC only loads on a Mac) and its pure parts work
+    from .osapi import mac
+    if sys.platform != "darwin":
+        assert mac.OBJC_ERROR and mac.permission_problems()[0][0] == "pyobjc"
+    assert mac.vk_for(0) == 0x41 and mac.vk_for(9) == 0x56 and mac.vk_for(49) == 0x20 and mac.vk_for(53) == 0x1B
+    assert mac.vk_for(63) in hotkeys.FN and mac.vk_for(55) in hotkeys.WIN and mac.vk_for(58) in hotkeys.ALT
+    assert mac.vk_for(59) in hotkeys.CTRL and mac.vk_for(56) in hotkeys.SHIFT and mac.vk_for(54) in hotkeys.WIN
+    assert mac.vk_for(200) >= 0x1000 and mac.vk_for(200) not in hotkeys.MODIFIER_VKS
+    assert len(set(mac.MAC_TO_VK.values())) == len(mac.MAC_TO_VK) - 1, "two Mac keys share a code (only Return)"
+    assert mac.modifier_down(63, 0x800000) is True and mac.modifier_down(63, 0) is False
+    assert mac.modifier_down(55, 0x100008) is True and mac.modifier_down(54, 0x100008) is False
+    assert mac.modifier_down(0, 0xFFFFFF) is None
+    import plistlib
+    agent = plistlib.loads(mac.agent_plist("/Apps/Aqua Lite/AquaLite.pyw"))
+    assert agent["RunAtLoad"] and agent["ProgramArguments"][-1] == "/Apps/Aqua Lite/AquaLite.pyw"
+    assert mac.agent_path().endswith("LaunchAgents/com.aqualite.app.plist".replace("/", os.sep))
+    # Retina: a 400x100-pixel bar at the bottom of a 1440x900-point screen (2x) sits at Cocoa y=0
+    assert mac.to_cocoa(1240, 1700, 400, 100, 2.0, 900) == (620.0, 0.0)
+    assert mac.from_cocoa_rect(0, 80, 1440, 795, 2.0, 900) == (0, 50, 2880, 1640)   # menu bar on top, Dock below
+    assert mac.app_name("com.google.Chrome", "Google Chrome", "Chrome") == "chrome"
+    assert textproc.app_category(mac.app_name("com.microsoft.VSCode", "Electron", "Code")) == "code"
+    assert mac.app_name("com.apple.Terminal", "Terminal", "Terminal").lower() in textproc.TERMINALS
+    assert textproc.app_category(mac.app_name("com.apple.mail", "Mail", "Mail")) == "email"
+    # Mac shortcuts: hold Fn to talk, Fn+Space for hands-free; modifier keys are never swallowed
+    FN, SP, LC, LO = 0x100, 0x20, 0xA2, 0xA4
+    mac_keys = {k: config.MAC_DEFAULTS[k] for k in config.MAC_DEFAULTS if k.startswith("hotkey")}
+    r = Rec(); m = hotkeys.HotkeyMachine(mac_keys, r)
+    assert m.on_key(FN, True) is False
+    assert m.on_key(SP, True) is True, "the space that starts hands-free must not reach the app"
+    m.on_key(SP, False); m.on_key(FN, False)
+    assert r.ev == ["start", "lock"], r.ev
+    r = Rec(); m = hotkeys.HotkeyMachine(mac_keys, r)
+    m.on_key(FN, True); m.on_key(0x5B, True); m.on_key(0x5B, False); m.on_key(FN, False)
+    assert r.ev == ["start", "command*", "mask*", "stop*"], r.ev   # Fn + Cmd = Command Mode
+    r = Rec(); m = hotkeys.HotkeyMachine({**mac_keys, "hotkey_ptt": "ctrl+option"}, r)
+    assert m.on_key(LC, True) is False and m.on_key(LO, True) is False
+    m.on_key(LO, False); m.on_key(LC, False)
+    assert r.ev == ["start", "mask", "stop"], r.ev   # (mask does nothing on a Mac)
+    for spec in ("fn", "globe", "ctrl+option", "cmd+shift+space", "right cmd", "ctrl+cmd+v"):
+        hotkeys.parse(spec)
 
 
 def check_report():
@@ -626,7 +735,8 @@ def check_look():
 
 
 def main():
-    for name, fn in (("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
+    for name, fn in (("every file compiles", check_files_compile),
+                     ("paste rules & app styles", check_rules), ("text cleanup & snippets", check_text),
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
                      ("learning & screen context", check_learning), ("instant text", check_instant), ("paste waits for the app", check_paste_wait), ("instant text tidies each sentence", check_sentence_tidy), ("edit by voice", check_voice_edit),
@@ -634,6 +744,7 @@ def main():
                      ("liquid glass theme", check_liquid_look),
                      ("liquid glass on the graphics card", check_liquid_bar),
                      ("liquid glass settings window", check_liquid_settings),
+                     ("platform layer (Windows, Mac)", check_platform),
                      ("problem report", check_report)):
         fn()
         print(f"ok  {name}")

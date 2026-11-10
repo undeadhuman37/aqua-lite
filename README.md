@@ -62,6 +62,22 @@ Aqua Lite updates itself: every time it starts, it checks GitHub for a newer ver
 (you'll see "Updated to ..." at the bottom of the screen). You can also pick **Check for updates** from the tray menu,
 or turn automatic updates off in Settings. Running `install.bat` again also updates. To remove everything, run `uninstall.bat`.
 
+## Install (macOS, preview)
+
+Mac support is new and **hasn't been tried on a Mac yet**. If you have one, testing it helps a lot: the checklist is in
+[docs/MAC.md](docs/MAC.md).
+
+1. Install Python 3.12 from [python.org](https://www.python.org/downloads/macos/) (it includes Tk).
+2. Download this repository, open Terminal in its folder and run `bash install-mac.sh`. It sets up a private environment in
+   `~/Library/Application Support/AquaLite`, runs the self-test and adds **Aqua Lite** to your Applications folder.
+3. Open Aqua Lite. macOS asks for **Accessibility**, **Input Monitoring** and the **microphone**: allow each one, then quit
+   and reopen it. Aqua Lite lives in the menu bar.
+4. Hold **Fn** (the globe key) and talk; `Fn + Space` is hands-free and `Fn + Cmd` is Command Mode. Keyboards without Fn
+   can use `ctrl+option` (Settings > Dictation). Set **System Settings > Keyboard > Press fn key to** to **Do Nothing**.
+
+The app isn't signed or notarized yet (that needs an Apple Developer account), so it's installed from source rather than
+as a download. To remove it, run `bash uninstall-mac.sh`.
+
 ## Shortcuts
 
 | Shortcut | Action |

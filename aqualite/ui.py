@@ -2,14 +2,12 @@
 import datetime
 import math
 import os
-import subprocess
-import sys
 import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import aero, gpu, history, hotkeys, llm, localai, memory, music, skin, stt
+from . import aero, gpu, history, hotkeys, llm, localai, memory, music, osapi, skin, stt
 from .config import APP_NAME, VERSION
 
 LANGS = [("auto", "Auto-detect"), ("en", "English"), ("ar", "Arabic"), ("fr", "French"), ("es", "Spanish"),
@@ -30,7 +28,9 @@ CATS = [("personal", "Personal messages", "WhatsApp, Telegram, Instagram, Discor
 STRENGTHS = [("verbatim", "Verbatim - punctuation only"), ("light", "Light - fillers & corrections"),
              ("medium", "Medium - also smooth grammar"), ("heavy", "Heavy - polish & tighten")]
 LOOKS = [("aero", "Frutiger Aero"), ("liquid", "Liquid Glass")]
-LOOK_MODES = [("system", "Match Windows"), ("light", "Light"), ("dark", "Dark")]
+OS = "macOS" if osapi.IS_MAC else "Windows"   # the system's name in labels
+LOOK_MODES = [("system", f"Match {OS}"), ("light", "Light"), ("dark", "Dark")]
+MIC_DEFAULT = f"({OS} default)"
 
 
 def _pair_combo(parent, pairs, value, width=28):
@@ -488,12 +488,9 @@ def _card_restyle(st, w):
 
 
 def _blur_ok():
-    """Windows can blur behind the Flow bar's rounded shape (Windows 10; not Windows 11)."""
-    if sys.platform != "win32":
-        return False
+    """Windows can blur behind the Flow bar's rounded shape (Windows 10; not Windows 11, not a Mac yet)."""
     try:
-        from . import winapi
-        return winapi.Frost.shapes_ok()
+        return osapi.frost_supported()
     except Exception:
         return False
 
@@ -503,7 +500,8 @@ def _key_name(k):
     names = {"ctrl": "Ctrl", "win": "Win", "alt": "Alt", "shift": "Shift", "space": "Space", "esc": "Esc",
              "escape": "Esc", "enter": "Enter", "tab": "Tab", "rctrl": "Right Ctrl", "lctrl": "Left Ctrl",
              "ralt": "Right Alt", "lalt": "Left Alt", "rshift": "Right Shift", "lshift": "Left Shift",
-             "capslock": "Caps Lock", "backspace": "Backspace"}
+             "capslock": "Caps Lock", "backspace": "Backspace", "fn": "Fn", "globe": "Fn", "cmd": "Cmd",
+             "command": "Cmd", "rcmd": "Right Cmd", "option": "Option", "opt": "Option", "roption": "Right Option"}
     return names.get(k, k.upper() if len(k) <= 3 else k.title())
 
 
@@ -682,14 +680,10 @@ class SettingsWindow:
 
     def _tint_title(self):
         """Windows 11 colours the title bar to match (Windows 10 keeps its own)."""
-        if sys.platform != "win32":
+        if not osapi.SUPPORTED:
             return
         try:
-            from . import winapi
-            self.win.update_idletasks()
-            hwnd = winapi.user32.GetParent(self.win.winfo_id()) or self.win.winfo_id()
-            winapi.dark_title_bar(hwnd, C["dark_title"])
-            winapi.tint_title_bar(hwnd, *C["title"])
+            osapi.title_bar(self.win, C["dark_title"], *C["title"])
         except Exception:
             pass
 
@@ -1150,7 +1144,8 @@ class SettingsWindow:
     def _general(self, f):
         keys = self._card(f, "Shortcuts")
         for r, (key, label, hint) in enumerate((
-                ("hotkey_ptt", "Push-to-talk (hold)", "e.g. ctrl+win, f9, right alt, rctrl"),
+                ("hotkey_ptt", "Push-to-talk (hold)", "e.g. fn, ctrl+option, f5, right cmd" if osapi.IS_MAC
+                 else "e.g. ctrl+win, f9, right alt, rctrl"),
                 ("hotkey_handsfree_key", "+ key for hands-free", "pressed while holding push-to-talk"),
                 ("hotkey_command_key", "+ key for Command Mode", "pressed while holding push-to-talk"),
                 ("hotkey_paste_last", "Paste last transcript", ""),
@@ -1158,8 +1153,8 @@ class SettingsWindow:
                 ("hotkey_cancel", "Cancel recording", ""))):
             self._row(keys, r, label, ttk.Entry(keys, textvariable=self._var(key), width=24), hint)
         mic_card = self._card(f, "Microphone & language")
-        devices = ["(Windows default)"] + _safe_devices()
-        mic = tk.StringVar(value=self.cfg.get("mic_device") or "(Windows default)")
+        devices = [MIC_DEFAULT] + _safe_devices()
+        mic = tk.StringVar(value=self.cfg.get("mic_device") or MIC_DEFAULT)
         self.v["mic_device"] = mic
         mic_list = ttk.Combobox(mic_card, textvariable=mic, values=devices, state="readonly", width=44)
         self._row(mic_card, 0, "Microphone", mic_list)
@@ -1193,12 +1188,13 @@ class SettingsWindow:
         for box in (self.look_box, self.look_mode_box):
             box.bind("<<ComboboxSelected>>", lambda _e: self._preview_look(), add="+")
         self.win.after(300, self._preview_look)
-        typing = self._card(f, "Typing & Windows")
+        typing = self._card(f, f"Typing & {OS}")
         self._toggles(typing, (
             ("add_trailing_space", "Add a space after each dictation"),
             ("restore_clipboard", "Restore my clipboard after pasting"),
             ("shift_insert_in_editors", "Use Shift+Insert in VS Code / Cursor / Windsurf"),
-            ("launch_at_startup", "Start Aqua Lite when Windows starts"),
+            ("launch_at_startup", "Start Aqua Lite when I log in" if osapi.IS_MAC
+             else "Start Aqua Lite when Windows starts"),
             ("auto_update", "Update automatically when Aqua Lite starts")))
 
     def _ai(self, f):
@@ -1932,7 +1928,7 @@ class SettingsWindow:
         cfg = dict(self.cfg)
         for k, var in self.v.items():
             cfg[k] = var.get().strip() if isinstance(var.get(), str) else var.get()
-        if cfg.get("mic_device") == "(Windows default)":
+        if cfg.get("mic_device") == MIC_DEFAULT:
             cfg["mic_device"] = ""
         cfg["language"] = self.lang.get_key()
         cfg["look"] = self.look_box.get_key()
@@ -1980,10 +1976,7 @@ class SettingsWindow:
 
 def _open_folder(path):
     os.makedirs(path, exist_ok=True)
-    if sys.platform == "win32":
-        os.startfile(path)
-    else:
-        subprocess.Popen(["xdg-open", path])
+    osapi.open_folder(path)
 
 
 def _tree_remove(tree):

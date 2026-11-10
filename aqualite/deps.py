@@ -12,6 +12,8 @@ import sys
 log = logging.getLogger("aqualite")
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REQS = os.path.join(APP_DIR, "requirements.txt")
+if sys.platform == "darwin" and os.path.isfile(os.path.join(APP_DIR, "requirements-mac.txt")):
+    REQS = os.path.join(APP_DIR, "requirements-mac.txt")   # the same list plus PyObjC
 STAMP = os.path.join(sys.prefix, "aqualite-requirements.sha256")
 NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -45,7 +47,7 @@ def mark_installed(reqs=REQS):
 
 
 def install(timeout=900):
-    """pip install -r requirements.txt with the environment's own (windowless) python. Raises on failure."""
+    """pip install -r requirements.txt (requirements-mac.txt on a Mac) with the environment's own (windowless) python. Raises on failure."""
     from .updater import console_python
     p = subprocess.run([console_python(), "-m", "pip", "install", "-r", REQS, "--quiet", "--disable-pip-version-check"],
                        capture_output=True, text=True, timeout=timeout, creationflags=NO_WINDOW)
