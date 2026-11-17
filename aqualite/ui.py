@@ -1033,7 +1033,7 @@ class SettingsWindow:
                 ("", c["hotkey_paste_last"], "", "Paste your last transcript again"),
                 ("", c.get("hotkey_undo_last", "alt+shift+x"), "", "Undo: remove the text of your last dictation"),
                 ("", c.get("hotkey_voice_commands", "alt+shift+c"), "",
-                 'Voice commands on/off: "go to Google", "type an email to Sam", "new tab"'),
+                 'Voice commands on/off: "go to Google", "open Spotify", "type an email to Sam"'),
                 ('Say "press enter"', "", "", 'At the end of a dictation: types it, then presses Enter'),
                 ("", c["hotkey_cancel"], "", "Cancel the current recording")]
         box = self._card(f, "Shortcuts")

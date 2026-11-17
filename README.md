@@ -34,7 +34,7 @@ It is not affiliated with or endorsed by Wispr AI, Inc.
 - **Understands the conversation (optional):** reads the chat you're replying to, so names, topic and tone fit. In Command Mode, say "reply to this saying I'm in" with nothing selected.
 - **"Press enter":** end a dictation with "press enter" or "send it" and the message is sent after it's typed.
 - **Undo:** `Alt + Shift + X` removes the text of your last dictation.
-- **Voice commands:** press `Alt + Shift + C` and talk to your computer, hands-free: "go to YouTube", "search for cheap flights", "new tab", "type an email to Sam saying I'll be late", "make it shorter". It keeps listening after each command until you press the shortcut again (or say "stop listening").
+- **Voice commands:** press `Alt + Shift + C` and talk to your computer, hands-free: "go to YouTube", "open Spotify", "search for cheap flights", "new tab", "type an email to Sam saying I'll be late", "make it shorter". It keeps listening after each command until you press the shortcut again (or say "stop listening").
 - **Command Mode:** select text, hold `Ctrl + Win + Alt`, and say "make this formal", "translate to Arabic" or "turn this into bullets".
 - **AI formatting:** removes fillers, applies self-corrections ("at 5, no wait, 6"), adds punctuation and lists, and writes numbers and emails properly. It never answers your dictation.
 - **Styles per app:** casual in WhatsApp, formal in email, exact identifiers in code editors. Four editing strengths, from verbatim to polished.

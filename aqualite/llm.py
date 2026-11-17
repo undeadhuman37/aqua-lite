@@ -47,6 +47,7 @@ Never add preamble, explanations, quotes or markdown fences (unless the content 
 
 VOICE_COMMAND_SYSTEM = """You turn one spoken command for a computer into exactly one line, in one of these forms:
 go to <website name or address>
+open <app name, e.g. open spotify>
 search <what to search for>
 press <keys, e.g. enter, ctrl+t, alt+left>
 type <exact text to type>

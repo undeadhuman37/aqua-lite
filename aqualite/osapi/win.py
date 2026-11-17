@@ -22,6 +22,24 @@ KeyboardHook = winapi.KeyboardHook
 press_enter = winapi.press_enter
 
 
+def installed_apps():
+    """Every app in the Start menu, desktop and Store apps alike: {name: AppID}. Takes about a second."""
+    import json
+    import subprocess
+    out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                          "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-StartApps | ConvertTo-Json -Compress"],
+                         capture_output=True, timeout=30, creationflags=0x08000000).stdout   # no console window
+    items = json.loads(out.decode("utf-8-sig").strip() or "[]")
+    items = [items] if isinstance(items, dict) else items
+    return {i["Name"]: i["AppID"] for i in items if i.get("Name") and i.get("AppID")}
+
+
+def launch_app(app_id):
+    import subprocess
+    subprocess.Popen(["explorer.exe", "shell:AppsFolder\\" + app_id])
+    return True
+
+
 def press_shortcut(spec):
     try:
         vks = [min(g) for g in hotkeys.parse(spec)]   # the plain key of each group: "ctrl" -> VK_CONTROL

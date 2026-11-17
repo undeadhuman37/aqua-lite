@@ -282,6 +282,26 @@ def press_enter():
     tap_key("enter")
 
 
+def installed_apps():
+    """UNTESTED: the apps in the Applications folders: {name: path}."""
+    apps = {}
+    for folder in ("/Applications", "/System/Applications", "/System/Applications/Utilities",
+                   "/Applications/Utilities", os.path.expanduser("~/Applications")):
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        for n in names:
+            if n.endswith(".app"):
+                apps.setdefault(n[:-4], os.path.join(folder, n))
+    return apps
+
+
+def launch_app(app_id):
+    subprocess.Popen(["open", "-a", app_id])
+    return True
+
+
 def press_shortcut(spec):
     """UNTESTED: a Windows shortcut ('ctrl+t') -> the Mac's (Cmd+T); Ctrl becomes Cmd unless MAC_SHORTCUTS says."""
     spec = spec.lower()

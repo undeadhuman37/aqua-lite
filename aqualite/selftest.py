@@ -588,9 +588,19 @@ def check_voice_commands():
     assert p("new tab") == ("keys", "ctrl+t")
     assert p("press control shift t") == ("keys", "ctrl+shift+t")
     assert p("Make it shorter") == ("edit", "Make it shorter")
+    assert p("Open Spotify.") == ("app", "spotify") and p("launch the VS Code app") == ("app", "visual studio code")
+    assert p("open google") == ("app", "google") and p("open github.com") == ("open", "https://github.com")
+    apps = {"Google Chrome": 1, "Spotify": 2, "Uninstall Spotify Helper": 3, "Calculator": 4, "Visual Studio Code": 5,
+            "Microsoft Word": 6}
+    f = voicecmd.find_app
+    assert f("spotify", apps) == "Spotify" and f("chrome", apps) == "Google Chrome"
+    assert f("calculater", apps) == "Calculator" and f("visual studio code", apps) == "Visual Studio Code"
+    assert f("word", apps) == "Microsoft Word" and f("helper", apps) is None, "never an uninstaller"
+    assert f("google", apps) is None, "open google is the site, not Chrome"
+    assert f("youtube", {"YouTube": 9}) == "YouTube", "an installed app beats the site"
     assert p("Stop listening.") == ("stop",) and p("turn off voice commands") == ("stop",)
     assert p("what a nice day")[0] == "unknown"
-    for line in ("go to github", "search python", "press ctrl+s", "type hi", "write a poem", "edit make it formal"):
+    for line in ("go to github", "open spotify", "search python", "press ctrl+s", "type hi", "write a poem", "edit make it formal"):
         assert p(line)[0] != "unknown", f"the AI's answer form isn't understood: {line}"
     for kind, spec in voicecmd.KEYS.items():   # every spoken key is one Windows can press
         hotkeys.parse(spec)

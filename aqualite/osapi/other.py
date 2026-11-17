@@ -122,6 +122,15 @@ def press_enter():
     pass
 
 
+def installed_apps():
+    """Apps the user can open by voice: {shown name: what launch_app needs}."""
+    return {}
+
+
+def launch_app(app_id):
+    return False
+
+
 def press_shortcut(spec):
     """'ctrl+t' -> press it (voice commands). Windows names; a Mac presses its own version (Cmd+T)."""
     return False

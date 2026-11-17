@@ -31,6 +31,7 @@ class App:
         self.paused = False
         self.voice = False        # voice commands are listening (hands-free, until the shortcut is pressed again)
         self.voice_last = 0.0
+        self.apps, self.apps_at = {}, 0.0   # installed apps for "open spotify" (read when voice commands start)
         self.rec_started = 0.0
         self.rec_command = False
         self.settings = None
@@ -500,6 +501,8 @@ class App:
             self.bar.toast(f"Microphone error: {e}", "error", 5)
             return
         self.voice, self.voice_last = True, time.time()
+        if ON and not self.apps:
+            self.jobs.put(("read_apps",))   # so the first "open ..." doesn't wait for the list
         self.bar.rest = "command"
         self.live.stop()
         self._sound("lock")
@@ -736,6 +739,8 @@ class App:
                         self.post("toast", "Nothing dictated yet", "warn")
                 elif job[0] == "undo_last":
                     self._undo_last()
+                elif job[0] == "read_apps":
+                    self._installed_apps(0)
                 elif job[0] == "voice_command":
                     self._voice_command(*job[1:])
                 elif job[0] == "discard_live":
@@ -901,11 +906,33 @@ class App:
             webbrowser.open(arg)
         elif not ON:
             return
+        elif kind == "app":
+            self._open_app(arg)
         elif kind == "keys":
             if not osapi.press_shortcut(arg):
                 self.post("toast", f"Don't know the key {arg}", "warn")
         else:
             self._voice_write(kind, arg, said, len(pcm) / audio.RATE, engine, t0)
+
+    def _installed_apps(self, max_age):
+        if time.time() - self.apps_at > max_age:
+            try:
+                self.apps, self.apps_at = osapi.installed_apps(), time.time()
+                log.info("voice commands: %d apps found", len(self.apps))
+            except Exception as e:
+                log.warning("voice commands: couldn't list apps: %s", e)
+        return self.apps
+
+    def _open_app(self, name):
+        """ "open spotify": the installed app, else the website of that name, else a web search for it."""
+        key = voicecmd.find_app(name, self._installed_apps(3600))
+        if key is None:   # maybe installed since the list was read
+            key = voicecmd.find_app(name, self._installed_apps(60))
+        if key is None:
+            webbrowser.open(voicecmd.url_for(name))
+            return
+        log.info("voice commands: opening %s", key)
+        osapi.launch_app(self.apps[key])
 
     def _voice_write(self, kind, arg, said, seconds, engine, t0):
         """Voice commands that put text in: type (as said), write (composed by the AI), edit (what's there)."""
