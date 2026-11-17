@@ -570,6 +570,44 @@ def check_voice_edit():
         pass
 
 
+def check_voice_commands():
+    """Voice commands: spoken commands become the right action, and the shortcut toggles them."""
+    import numpy as np
+    from . import audio, voicecmd
+    p = voicecmd.parse
+    assert p("Go to Google.") == ("open", "https://www.google.com")
+    assert p("Okay, open the YouTube website") == ("open", "https://www.youtube.com")
+    assert p("go to bbc dot co dot uk") == ("open", "https://bbc.co.uk")
+    assert p("Search for cheap flights") == ("open", "https://www.google.com/search?q=cheap+flights")
+    assert p("search youtube for lofi beats")[1].startswith("https://www.youtube.com/results?")
+    assert p("go to my bank")[1].startswith("https://www.google.com/search?q="), "unknown sites are searched"
+    assert p("Type an email to Sam saying I'll be late.") == ("write", "Type an email to Sam saying I'll be late")
+    assert p("Draft a reply thanking them") == ("write", "Draft a reply thanking them")
+    assert p("Type hello there, how are you?") == ("type", "hello there, how are you?")
+    assert p("Please press enter.") == ("keys", "enter")
+    assert p("new tab") == ("keys", "ctrl+t")
+    assert p("press control shift t") == ("keys", "ctrl+shift+t")
+    assert p("Make it shorter") == ("edit", "Make it shorter")
+    assert p("Stop listening.") == ("stop",) and p("turn off voice commands") == ("stop",)
+    assert p("what a nice day")[0] == "unknown"
+    for line in ("go to github", "search python", "press ctrl+s", "type hi", "write a poem", "edit make it formal"):
+        assert p(line)[0] != "unknown", f"the AI's answer form isn't understood: {line}"
+    for kind, spec in voicecmd.KEYS.items():   # every spoken key is one Windows can press
+        hotkeys.parse(spec)
+    # the shortcut toggles; it does nothing while dictating
+    LA, SH, C = 0xA4, 0xA0, 0x43
+    r = Rec()
+    m = hotkeys.HotkeyMachine({"hotkey_ptt": "ctrl+win"}, r)
+    m.on_key(LA, True); m.on_key(SH, True)
+    assert m.on_key(C, True) is True, "the shortcut's letter is swallowed"
+    assert r.ev == ["voice_commands", "mask"], r.ev
+    # handing over one command keeps the recording going
+    rec = audio.Recorder()
+    rec.chunks, rec.speech_frames, rec.total = [np.zeros(1600, np.float32)] * 3, 3200, 4800
+    pcm, speech = rec.take()
+    assert len(pcm) == 4800 and speech == 0.2 and rec.chunks == [] and rec.speech_frames == 0
+
+
 def check_private_mode():
     from . import localai
     engines = localai.ENGINES
@@ -740,6 +778,7 @@ def main():
                      ("shortcuts", check_hotkeys), ("AI prompts & engines", check_prompts),
                      ("music shuffle", check_music), ("updater", check_updater), ("new features", check_new_features),
                      ("learning & screen context", check_learning), ("instant text", check_instant), ("paste waits for the app", check_paste_wait), ("instant text tidies each sentence", check_sentence_tidy), ("edit by voice", check_voice_edit),
+                     ("voice commands", check_voice_commands),
                      ("private mode", check_private_mode), ("new look", check_look), ("flow bar on the graphics card", check_gpu_bar),
                      ("liquid glass theme", check_liquid_look),
                      ("liquid glass on the graphics card", check_liquid_bar),

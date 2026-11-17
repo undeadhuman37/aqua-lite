@@ -24,7 +24,7 @@ Every module starts with a docstring saying what it does; big files are split by
 | Entry and wiring | `AquaLite.pyw` (starts it), `app.py` (`App`: events from the hotkey thread go through `post()` -> `ev_*` on the Tk thread; slow work goes to the `_worker` thread via `self.jobs`) |
 | Shortcuts | `hotkeys.py` (pure state machine on Windows VK codes; the Mac tap translates into them) |
 | Recording and speech | `audio.py` (16 kHz mic), `stt.py` (Groq/OpenAI/local Whisper), `live.py` (live words + quick instant-text model), `gpu.py` (NVIDIA engine) |
-| Instant text and editing | `instant.py` (typing while you talk, `Polisher`, `safe_to_replace`), `edits.py` (edit by voice) |
+| Instant text and editing | `instant.py` (typing while you talk, `Polisher`, `safe_to_replace`), `edits.py` (edit by voice), `voicecmd.py` (voice commands, run by `App._voice_*`) |
 | AI | `llm.py` (prompts and providers), `localai.py` (private mode, llama.cpp), `memory.py` (style profile), `learn.py` (learning from corrections), `context.py` (screen context) |
 | Text rules | `textproc.py` (pure: paste keys, app categories by process name, cleanup, snippets) |
 | Flow bar | `overlay.py` (`FlowBar`: state, animation, frame pacing), `aero.py` / `liquid.py` (Pillow drawing per theme), `glbar.py` (same frames on the graphics card) |

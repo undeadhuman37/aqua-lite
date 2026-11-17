@@ -1032,6 +1032,8 @@ class SettingsWindow:
                 ("Tap", ptt, "twice", "Hands-free, without reaching for the extra key"),
                 ("", c["hotkey_paste_last"], "", "Paste your last transcript again"),
                 ("", c.get("hotkey_undo_last", "alt+shift+x"), "", "Undo: remove the text of your last dictation"),
+                ("", c.get("hotkey_voice_commands", "alt+shift+c"), "",
+                 'Voice commands on/off: "go to Google", "type an email to Sam", "new tab"'),
                 ('Say "press enter"', "", "", 'At the end of a dictation: types it, then presses Enter'),
                 ("", c["hotkey_cancel"], "", "Cancel the current recording")]
         box = self._card(f, "Shortcuts")
@@ -1150,6 +1152,7 @@ class SettingsWindow:
                 ("hotkey_command_key", "+ key for Command Mode", "pressed while holding push-to-talk"),
                 ("hotkey_paste_last", "Paste last transcript", ""),
                 ("hotkey_undo_last", "Undo last dictation", "removes what Aqua Lite just typed"),
+                ("hotkey_voice_commands", "Voice commands on/off", "keeps listening until pressed again"),
                 ("hotkey_cancel", "Cancel recording", ""))):
             self._row(keys, r, label, ttk.Entry(keys, textvariable=self._var(key), width=24), hint)
         mic_card = self._card(f, "Microphone & language")
@@ -1956,7 +1959,7 @@ class SettingsWindow:
         cfg = self._collect()
         try:
             for k in ("hotkey_ptt", "hotkey_handsfree_key", "hotkey_command_key", "hotkey_paste_last", "hotkey_cancel",
-                      "hotkey_undo_last"):
+                      "hotkey_undo_last", "hotkey_voice_commands"):
                 hotkeys.parse(cfg[k])
             float(cfg.get("handsfree_silence_secs") or 0)
             if cfg.get("private_mode") and not localai.ready(cfg.get("local_ai_model", localai.DEFAULT_MODEL)):

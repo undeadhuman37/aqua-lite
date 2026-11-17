@@ -97,6 +97,7 @@ DEFAULTS = {
     "hotkey_paste_last": "alt+shift+z",  # paste the last transcript again
     "hotkey_cancel": "esc",              # cancel while recording
     "hotkey_undo_last": "alt+shift+x",   # remove the text of the last dictation
+    "hotkey_voice_commands": "alt+shift+c",   # voice commands on/off: "go to google", "type an email to..."
     "double_tap_handsfree": True,        # tap the push-to-talk keys twice -> hands-free
 
     # --- Speech to text ---
@@ -184,6 +185,7 @@ MAC_DEFAULTS = {
     "hotkey_command_key": "cmd",         # not part of fn or ctrl+option, so it never clashes with them
     "hotkey_paste_last": "ctrl+cmd+v",
     "hotkey_undo_last": "ctrl+cmd+x",
+    "hotkey_voice_commands": "ctrl+cmd+c",
     "context_blocked_apps": DEFAULTS["context_blocked_apps"] + ["keychain access", "passwords"],
 }
 if sys.platform == "darwin":

@@ -22,7 +22,8 @@ KEY_NAMES = {
     "space": {0x20}, "backspace": {0x08}, "esc": {0x1B}, "escape": {0x1B}, "tab": {0x09}, "enter": {0x0D},
     "capslock": {0x14}, "caps lock": {0x14}, "insert": {0x2D}, "delete": {0x2E}, "home": {0x24},
     "end": {0x23}, "pageup": {0x21}, "pagedown": {0x22}, "pause": {0x13}, "scrolllock": {0x91},
-    "menu": {0x5D}, "apps": {0x5D}, "`": {0xC0}, "backquote": {0xC0},
+    "menu": {0x5D}, "apps": {0x5D}, "`": {0xC0}, "backquote": {0xC0}, "=": {0xBB}, "-": {0xBD},
+    "left": {0x25}, "up": {0x26}, "right": {0x27}, "down": {0x28},
     **{f"f{i}": {0x6F + i} for i in range(1, 25)},
     **{chr(c): {c - 32} for c in range(ord("a"), ord("z") + 1)},
     **{str(d): {0x30 + d} for d in range(10)},
@@ -45,7 +46,8 @@ def parse(spec):
 
 
 class HotkeyMachine:
-    """Calls emit(name, command_mode) with: start, stop, cancel, lock, command, paste_last, undo_last, mask."""
+    """Calls emit(name, command_mode) with: start, stop, cancel, lock, command, paste_last, undo_last,
+    voice_commands, mask."""
     TAP_SECS = 0.30          # a press shorter than this is a tap, not a dictation
     DOUBLE_TAP_SECS = 0.45   # second tap within this of the first -> hands-free
 
@@ -71,6 +73,7 @@ class HotkeyMachine:
         self.cancel_key = parse(cfg.get("hotkey_cancel", "esc"))[0]
         self.paste_last = parse(cfg.get("hotkey_paste_last", "alt+shift+z"))
         self.undo_last = parse(cfg.get("hotkey_undo_last", "alt+shift+x"))
+        self.voice = parse(cfg.get("hotkey_voice_commands", "alt+shift+c"))
         self.double_tap = bool(cfg.get("double_tap_handsfree", True))
         self.ptt_vks = set().union(*self.ptt)
 
@@ -110,6 +113,10 @@ class HotkeyMachine:
                 return True
             if self._held(self.undo_last) and vk in self.undo_last[-1]:
                 self.emit("undo_last", self.command)
+                self.emit("mask", self.command)
+                return True
+            if self._held(self.voice) and vk in self.voice[-1]:
+                self.emit("voice_commands", self.command)
                 self.emit("mask", self.command)
                 return True
             others = self.down - self.ptt_vks

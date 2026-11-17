@@ -6,7 +6,7 @@ import logging
 import os
 import sys
 
-from .. import winapi
+from .. import hotkeys, winapi
 # the same functions and classes as winapi.py (the app called them there before)
 animations_on = winapi.animations_on
 apps_light_theme = winapi.apps_light_theme
@@ -20,6 +20,17 @@ Frost = winapi.Frost
 get_text = winapi.get_text
 KeyboardHook = winapi.KeyboardHook
 press_enter = winapi.press_enter
+
+
+def press_shortcut(spec):
+    try:
+        vks = [min(g) for g in hotkeys.parse(spec)]   # the plain key of each group: "ctrl" -> VK_CONTROL
+    except ValueError:
+        return False
+    winapi.wait_modifiers_released()
+    return winapi.send_combo(vks)
+
+
 process_elevated = winapi.process_elevated
 release_keys = winapi.release_keys
 restore = winapi.restore

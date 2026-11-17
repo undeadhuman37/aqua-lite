@@ -73,6 +73,7 @@ class FlowBar:
         self.levels = collections.deque([0.0] * (BARS + 1), maxlen=BARS + 1)
         self.env = 0.0      # smoothed mic level: rises instantly, falls gently, so bars don't flicker
         self.toast_job = None
+        self.rest = "idle"    # the state a toast goes back to ("command" while voice commands listen)
         self.dirty = True
         now = time.perf_counter()
         self.last_sample, self.phase = now, 1.0
@@ -288,7 +289,7 @@ class FlowBar:
     def toast(self, text, kind="info", seconds=2.8):
         self.set_state("toast", text)
         self.kind = kind
-        self.toast_job = self.root.after(int(seconds * 1000), lambda: self.set_state("idle"))
+        self.toast_job = self.root.after(int(seconds * 1000), lambda: self.set_state(self.rest))
 
     # ---------------------------------------------------------------- frame loop
     def _wake(self):

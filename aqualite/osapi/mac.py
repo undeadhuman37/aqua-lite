@@ -69,7 +69,16 @@ MODIFIER_BITS = {59: 0x1, 56: 0x2, 60: 0x4, 55: 0x8, 54: 0x10, 58: 0x20, 61: 0x4
 CAPS_LOCK = 57
 # names used by the app (winapi's VK names) -> Mac key codes for posting
 KEYCODE = {"enter": 36, "backspace": 51, "left": 123, "right": 124, "delete": 117, "v": 9, "c": 8, "z": 6,
-           "shift": 56, "cmd": 55, "ctrl": 59, "alt": 58}
+           "shift": 56, "cmd": 55, "ctrl": 59, "alt": 58,
+           # the rest are for voice commands ("new tab", "scroll down")
+           "tab": 48, "esc": 53, "space": 49, "pageup": 116, "pagedown": 121, "home": 115, "end": 119, "up": 126,
+           "down": 125, "=": 24, "-": 27, "[": 33, "]": 30, "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "x": 7,
+           "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "o": 31, "u": 32, "i": 34, "p": 35, "l": 37,
+           "j": 38, "k": 40, "n": 45, "m": 46}
+MAC_SHORTCUTS = {   # Windows shortcut -> the Mac's own (already in Mac names: cmd, ctrl, alt = Option)
+    "alt+left": "cmd+[", "alt+right": "cmd+]", "ctrl+y": "cmd+shift+z", "ctrl+tab": "ctrl+tab",
+    "ctrl+shift+tab": "ctrl+shift+tab", "home": "cmd+up", "end": "cmd+down",
+}
 FLAG_SHIFT, FLAG_CTRL, FLAG_ALT, FLAG_CMD, FLAG_FN = 0x20000, 0x40000, 0x80000, 0x100000, 0x800000
 
 
@@ -271,6 +280,21 @@ def send_mask():
 def press_enter():
     wait_modifiers_released()
     tap_key("enter")
+
+
+def press_shortcut(spec):
+    """UNTESTED: a Windows shortcut ('ctrl+t') -> the Mac's (Cmd+T); Ctrl becomes Cmd unless MAC_SHORTCUTS says."""
+    spec = spec.lower()
+    mac = MAC_SHORTCUTS.get(spec) or spec.replace("ctrl", "cmd").replace("win", "ctrl")
+    *mods, key = mac.split("+")
+    if key not in KEYCODE or any(m not in ("cmd", "ctrl", "alt", "shift") for m in mods):
+        return False
+    wait_modifiers_released()
+    held = 0
+    for m in mods:
+        held |= {"cmd": FLAG_CMD, "shift": FLAG_SHIFT, "ctrl": FLAG_CTRL, "alt": FLAG_ALT}[m]
+    nav = key in ("left", "right", "up", "down", "pageup", "pagedown", "home", "end", "delete")
+    return _combo(key, held | (FLAG_FN if nav else 0), tuple(mods))
 
 
 def undo_insert(text, proc):

@@ -106,6 +106,14 @@ class Recorder:
             self.level = 0.0
             return resample(audio, self.rate), self.speech_frames / max(self.rate, 1)
 
+    def take(self):
+        """Hand over what's been recorded and keep recording (voice commands: one command at a time).
+        Like stop(), returns (audio at 16 kHz, seconds of speech)."""
+        chunks, self.chunks = self.chunks, []
+        speech, self.speech_frames, self.total = self.speech_frames, 0, 0
+        audio = np.concatenate(chunks) if chunks else np.zeros(0, np.float32)
+        return resample(audio, self.rate), speech / max(self.rate, 1)
+
     def snapshot(self, max_secs):
         """The last `max_secs` of audio so far, at 16 kHz, without stopping (for the live preview)."""
         chunks = list(self.chunks)

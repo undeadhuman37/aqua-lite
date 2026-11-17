@@ -45,6 +45,17 @@ COMMAND_SYSTEM = """You are Command Mode in a voice dictation app. The user may 
 Never add preamble, explanations, quotes or markdown fences (unless the content itself is code). Keep the language of the selected text unless the instruction asks for another language. Spell these words exactly: {dictionary}"""
 
 
+VOICE_COMMAND_SYSTEM = """You turn one spoken command for a computer into exactly one line, in one of these forms:
+go to <website name or address>
+search <what to search for>
+press <keys, e.g. enter, ctrl+t, alt+left>
+type <exact text to type>
+write <instruction for text to compose, e.g. write a reply saying I'll be there at 5>
+edit <instruction that changes text already written, e.g. make it shorter>
+unknown
+Answer with that one line only. Use unknown when it isn't a command for the computer."""
+
+
 VOICE_EDIT_SYSTEM = """You are the voice editor in a dictation app. The user is typing in {app}{title} and spoke an instruction with nothing selected. You get the instruction and the TEXT BEFORE CURSOR (what's already in the box, ending where their cursor is).
 
 Decide which one it is:
@@ -269,3 +280,9 @@ def run_command(cfg, instruction, selection, ctx):
     user = f"INSTRUCTION: {instruction}\n\nSELECTED TEXT:\n<<<\n{selection}\n>>>" if selection.strip() \
         else f"INSTRUCTION: {instruction}\n\n(No text is selected.)"
     return _tidy(chat(cfg, system, user, max_tokens=3000, timeout=45))
+
+
+def voice_command(cfg, said):
+    """Voice commands: a command the rules didn't know -> one line voicecmd.parse understands."""
+    out = _tidy(chat(cfg, VOICE_COMMAND_SYSTEM, said, max_tokens=200, timeout=15))
+    return out.splitlines()[0].strip() if out else ""

@@ -115,7 +115,7 @@ def _send(vks, up):
 
 def send_combo(names):
     """Wispr helper timing: all key-downs in one SendInput, Sleep(50), all key-ups (retry once)."""
-    vks = [VK[n] for n in names]
+    vks = [VK[n] if isinstance(n, str) else n for n in names]
     ok = _send(vks, False)
     time.sleep(0.05)
     if not _send(list(reversed(vks)), True):

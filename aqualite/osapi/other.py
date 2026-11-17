@@ -122,6 +122,11 @@ def press_enter():
     pass
 
 
+def press_shortcut(spec):
+    """'ctrl+t' -> press it (voice commands). Windows names; a Mac presses its own version (Cmd+T)."""
+    return False
+
+
 def undo_insert(text, proc):
     return "none"
 

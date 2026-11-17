@@ -6,9 +6,10 @@ import sys
 import threading
 import time
 import tkinter as tk
+import webbrowser
 
 from . import (audio, config, context, deps, edits, gpu, history, hotkeys, instant, learn, live, llm, localai, memory,
-               music, osapi, report, sounds, stt, textproc, updater)
+               music, osapi, report, sounds, stt, textproc, updater, voicecmd)
 from .overlay import FlowBar
 
 ON = osapi.SUPPORTED   # this system lets us type into other apps (Windows, macOS)
@@ -28,6 +29,8 @@ class App:
         self.music = music.MusicPlayer(self.cfg)
         self.machine = hotkeys.HotkeyMachine(self.cfg, self._on_hotkey)
         self.paused = False
+        self.voice = False        # voice commands are listening (hands-free, until the shortcut is pressed again)
+        self.voice_last = 0.0
         self.rec_started = 0.0
         self.rec_command = False
         self.settings = None
@@ -179,6 +182,8 @@ class App:
             log.info("hands-free: %.0fs of silence, finishing", quiet)
             self.machine.reset()
             self.ev_hk_stop(self.rec_command)
+        if self.voice:
+            self._voice_listen()
         self.root.after(15, self._pump)
 
     def _preload(self):
@@ -217,6 +222,8 @@ class App:
 
     # ------------------------------------------------------------------ hotkey events
     def ev_hk_start(self, command):
+        if self.voice:   # dictating takes the microphone over from voice commands
+            self._voice_off()
         try:
             self.recorder.start(self.cfg.get("mic_device", ""))
         except Exception as e:
@@ -474,13 +481,68 @@ class App:
     def ev_hk_undo_last(self, _command):
         self.jobs.put(("undo_last",))
 
+    # ------------------------------------------------------------------ voice commands
+    def ev_hk_voice_commands(self, _command):
+        if self.voice:
+            self._voice_off("Voice commands off")
+        elif not (self.paused or self.machine.recording):
+            self._voice_on()
+
+    def ev_voice_off(self, why="Voice commands off"):
+        if self.voice:
+            self._voice_off(why)
+
+    def _voice_on(self):
+        try:
+            self.recorder.start(self.cfg.get("mic_device", ""))
+        except Exception as e:
+            log.exception("mic")
+            self.bar.toast(f"Microphone error: {e}", "error", 5)
+            return
+        self.voice, self.voice_last = True, time.time()
+        self.bar.rest = "command"
+        self.live.stop()
+        self._sound("lock")
+        self._tray("recording")
+        key = self.cfg.get("hotkey_voice_commands", "").upper().replace("+", " + ")
+        self.bar.toast(f'Voice commands on - say "go to Google" ({key} to stop)', "ok", 3)
+        log.info("voice commands on")
+
+    def _voice_off(self, why=None):
+        self.voice = False
+        self.bar.rest = "idle"
+        if self.recorder.active:
+            self.recorder.stop()
+        self._sound("stop")
+        self._tray("idle")
+        if why:
+            self.bar.toast(why, "info", 2)
+        else:
+            self.bar.set_state("idle")
+        log.info("voice commands off")
+
+    def _voice_listen(self):
+        """Every pump while voice commands are on: a pause after some speech = one command, sent to the worker
+        while the microphone keeps listening for the next."""
+        rec = self.recorder
+        heard = rec.speech_frames / max(rec.rate, 1)
+        if heard >= 0.25 and (rec.silent_for > 0.9 or rec.duration > 30):
+            self.voice_last = time.time()
+            self.jobs.put(("voice_command",) + rec.take())
+        elif rec.duration > 30:   # only noise so far: drop it so the recording stays small
+            rec.take()
+        if time.time() - self.voice_last > 60 * float(self.cfg.get("max_handsfree_minutes", 10)):
+            self._voice_off("Voice commands off - nothing said for a while")
+
     # ------------------------------------------------------------------ ui events
     def ev_toast(self, text, kind="info", seconds=2.8):
         self.bar.toast(text, kind, seconds)
 
     def ev_bar(self, state):
+        if state == "idle" and self.voice:
+            state = "command"   # a command finished: keep listening for the next one
         self.bar.set_state(state)
-        self._tray("idle" if state == "idle" else state)
+        self._tray("recording" if self.voice else state)
 
     def ev_report_problem(self):
         """Build a privacy-safe report, copy it, and open it so the user sees exactly what they'd share."""
@@ -674,6 +736,8 @@ class App:
                         self.post("toast", "Nothing dictated yet", "warn")
                 elif job[0] == "undo_last":
                     self._undo_last()
+                elif job[0] == "voice_command":
+                    self._voice_command(*job[1:])
                 elif job[0] == "discard_live":
                     if ON:
                         self._swap_live(job[1], "")
@@ -810,6 +874,67 @@ class App:
             result = osapi.paste(final, cfg, target=target, saved=saved)
             status = result["status"]
         self._after_insert(final, result, status, enter, target, ctx, mode, raw, seconds, engine, latency, screen)
+
+    def _voice_command(self, pcm, speech_secs):
+        """Voice commands (worker thread): hear one command and do it - open a site, press keys, type, write."""
+        cfg = self.cfg
+        if not self.voice:
+            return   # switched off while it was being said
+        t0 = time.perf_counter()
+        said, engine = stt.transcribe(audio.boost(pcm) if cfg.get("whisper_boost", True) else pcm, cfg)
+        if not said.strip() or stt.is_hallucination(said, speech_secs):
+            return
+        action = voicecmd.parse(said)
+        if action[0] == "unknown" and llm.resolve_provider(cfg):
+            try:
+                action = voicecmd.parse(llm.voice_command(cfg, said))
+            except Exception as e:
+                log.warning("voice commands: AI didn't answer: %s", e)
+        kind, arg = action[0], action[-1]
+        log.info("voice command: %s | text=%r", kind, said)
+        self.post("caption", said)
+        if kind == "stop":
+            self.post("voice_off")
+        elif kind == "unknown":
+            self.post("toast", f'Not a command: "{said[:40]}"', "warn", 3)
+        elif kind == "open":
+            webbrowser.open(arg)
+        elif not ON:
+            return
+        elif kind == "keys":
+            if not osapi.press_shortcut(arg):
+                self.post("toast", f"Don't know the key {arg}", "warn")
+        else:
+            self._voice_write(kind, arg, said, len(pcm) / audio.RATE, engine, t0)
+
+    def _voice_write(self, kind, arg, said, seconds, engine, t0):
+        """Voice commands that put text in: type (as said), write (composed by the AI), edit (what's there)."""
+        cfg = self.cfg
+        ctx, target = self._context()
+        text, saved = None, None
+        if kind == "type":
+            text = self._format(arg, ctx)
+            if cfg.get("add_trailing_space", True) and text and not text[-1].isspace():
+                text += " "
+        elif not llm.resolve_provider(cfg):
+            self.post("toast", "Writing by voice needs an AI key (Settings > Speech & AI)", "warn", 5)
+            return
+        else:
+            selection = ""
+            if kind == "edit":
+                selection, saved = osapi.copy_selection()
+                if not selection.strip() and target[0].lower() not in textproc.TERMINALS:
+                    text = self._voice_edit(arg, ctx, target, saved)
+                    if text is None:
+                        return   # edited in place, or it said why not
+                    text = text or None
+            if text is None:
+                text = llm.run_command(cfg, arg, selection, ctx)
+        if not text or not text.strip():
+            return
+        result = osapi.paste(text, cfg, target=target, saved=saved)
+        self._after_insert(text, result, result["status"], False, target, ctx, "command", said, seconds, engine,
+                           time.perf_counter() - t0, "")
 
     def _quick_finish(self, pcm, speech_secs, seconds, t0, live_info):
         """Instant text with sentence tidying: when you let go, most of the text is already tidied in the box.

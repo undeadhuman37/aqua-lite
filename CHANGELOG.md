@@ -3,6 +3,13 @@
 Headings are `## <version>` or `## <version> - <update name>`. The first line under each heading is what the app
 shows once after updating (keep it under 52 characters).
 
+## 2.1.0
+voice commands: "go to Google", hands-free
+- **Voice commands:** press `Alt + Shift + C` (Mac: `Ctrl + Cmd + C`) and talk to your computer. "Go to YouTube",
+  "search for cheap flights", "new tab", "scroll down", "type hello", "write an email to Sam saying I'll be late",
+  "make it shorter". It keeps listening after each command until you press the shortcut again or say "stop
+  listening". With an AI key (or private mode) it also understands commands said in your own words.
+
 ## 2.0.0 - New Generation Update
 now on Mac, with a new look and words as you talk
 - **Now on Mac:** download `AquaLite-Mac.zip` and double-click **Install Aqua Lite**. It sets up everything, Python
