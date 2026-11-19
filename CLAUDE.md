@@ -107,10 +107,10 @@ fixed long dictations pasting the user's old clipboard.
 
 ## Release
 
-2.0.0 "New Generation Update" was released from `v2` to `main` with the owner's approval. A VERSION change on `main`
-runs `.github/workflows/installer.yml`: the Windows installer plus `AquaLite-Mac.zip`, with fixed-name copies
-(`AquaLite-Setup.exe`, `AquaLite-Mac.zip`) that the README buttons link to through `releases/latest/download/`.
-`mac-check.yml` runs the Mac installer and self-test on GitHub's macOS runner.
+2.0.0 "New Generation Update" and 2.1.0 (voice commands) were released from `v2` to `main` with the owner's approval. A
+VERSION change on `main` runs `.github/workflows/installer.yml`: the Windows installer plus `AquaLite-Mac.zip`, with
+fixed-name copies (`AquaLite-Setup.exe`, `AquaLite-Mac.zip`) that the README buttons link to through
+`releases/latest/download/`. `mac-check.yml` runs the Mac installer and self-test on GitHub's macOS runner.
 
 Still to confirm: dictating with private mode on (the download works since the llama.cpp pre-release fix). Windows 11
 can't blur behind a rounded shape, so the Flow bar has no blur window there (`winapi.Frost.shapes_ok`).
