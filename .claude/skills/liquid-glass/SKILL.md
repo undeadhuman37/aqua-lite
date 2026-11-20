@@ -6,7 +6,7 @@ description: Build or change Aqua Lite's optional Liquid Glass theme (Apple-styl
 # Liquid Glass theme for Aqua Lite
 
 Liquid Glass is a **second, optional look**. Frutiger Aero stays the default and stays exactly as it is. Read
-`CLAUDE.md` first: its rules (branch `v2`, no personal details, never touch `%APPDATA%\AquaLite`, install only when
+`CLAUDE.md` first: its rules (work on `main`, no personal details, never touch `%APPDATA%\AquaLite`, install only when
 the owner says so, self-test must pass) apply here too.
 
 For deeper background, load the `liquid-glass-design` skill (Apple's rules for the material) and the `shader-dev`

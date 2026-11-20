@@ -6,7 +6,9 @@ and Pillow; the Flow bar can also draw through OpenGL (moderngl).
 
 ## Rules
 
-- `v2` is the 2.0 work branch: commit there freely. Push or release to `main` only when the owner says so.
+- Work on `main` (`v2` was the 2.0 branch; it's merged and retired). Commit freely; push only when the owner says
+  so. A VERSION change pushed to `main` publishes a release to every user (see Release), so change it only for a
+  release the owner approved.
 - Keep the owner's name and personal details out of code, commits and docs.
 - Never read or ask for `%APPDATA%\AquaLite` (logs, settings and API keys). The owner declined access to it. For a
   log, ask them to use **Report a problem** in the app (it strips dictated text).
@@ -46,6 +48,7 @@ Outside `aqualite/`: `install.bat` / `uninstall.bat` and `installer/` (Windows),
 | Anything that touches the OS (keys, clipboard, focused app, windows, theme) | add it to `osapi/other.py`, `win.py` and `mac.py` (the self-test fails if one lacks a name) |
 | How an app is treated (terminal, email, slow paste) | `textproc.py` lists (Windows process names; `mac.py` `BUNDLE_NAMES` maps Mac apps onto them) |
 | AI wording | `llm.py` prompts |
+| A voice command | `voicecmd.py` (`SITES`, `SEARCH`, `KEYS`, the regexes; `parse` is pure and self-tested); what the AI may answer: `llm.VOICE_COMMAND_SYSTEM`; running it: `App._voice_command` |
 | The Flow bar's look | `aero.FlowBarRenderer` / `liquid.LiquidBarRenderer` (`render()` for Pillow, `scene()` for `glbar`) |
 | A Settings page | the builder named in `ui.PAGES` |
 
@@ -72,7 +75,7 @@ Outside `aqualite/`: `install.bat` / `uninstall.bat` and `installer/` (Windows),
 - `mac.py` has never run on a Mac: each section is marked `UNTESTED`. It imports anywhere (PyObjC optional), so the
   self-test checks its pure parts on Windows. Don't call `winapi` from app code.
 
-## What 2.0 contains (on `v2`, not released)
+## What's in the app beyond plain dictation (2.0 and 2.1)
 
 1. **Instant text** (`instant.py`): words are typed while you talk (engines: quick processor model `live.py`,
    NVIDIA `gpu.py`, Deepgram). `Polisher` tidies each finished sentence with the AI (the next sentence is passed as
@@ -101,16 +104,24 @@ Outside `aqualite/`: `install.bat` / `uninstall.bat` and `installer/` (Windows),
    Guide: `.claude/skills/liquid-glass/SKILL.md`.
 7. **What's new page** (Settings and tray): built from the CHANGELOG entry (`config.whats_new_full`); opens by itself
    once after a major update.
+8. **Voice commands** (2.1, `voicecmd.py`, `App._voice_*`): `hotkey_voice_commands` toggles hands-free listening.
+   `_voice_listen` (on each `_pump`) hands each pause-ended utterance to the worker with `Recorder.take()`, so the
+   mic never stops. `voicecmd.parse` turns it into open a site/search, open an app (`osapi.installed_apps` /
+   `launch_app`, matched by `voicecmd.find_app`), press keys (`osapi.press_shortcut`), type, write (AI) or edit
+   (`_voice_edit`); anything else goes through `llm.voice_command` and is parsed again. The Flow bar stays in the
+   "command" state (`FlowBar.rest`, so toasts return to it).
 
-Also on `v2`: the clipboard is restored only after the paste has landed (`osapi/common.restore_when_pasted`), which
+Also: the clipboard is restored only after the paste has landed (`osapi/common.restore_when_pasted`), which
 fixed long dictations pasting the user's old clipboard.
 
 ## Release
 
-2.0.0 "New Generation Update" and 2.1.0 (voice commands) were released from `v2` to `main` with the owner's approval. A
-VERSION change on `main` runs `.github/workflows/installer.yml`: the Windows installer plus `AquaLite-Mac.zip`, with
-fixed-name copies (`AquaLite-Setup.exe`, `AquaLite-Mac.zip`) that the README buttons link to through
-`releases/latest/download/`. `mac-check.yml` runs the Mac installer and self-test on GitHub's macOS runner.
+Released so far: 2.0.0 "New Generation Update", 2.1.0 (voice commands). To release (only with the owner's OK):
+add a `## <version>` or `## <version> - <name>` entry at the top of `CHANGELOG.md` (its first line is the in-app
+"what's new" toast, under 52 characters), set `VERSION`, self-test, push `main`. A VERSION change on `main` runs
+`.github/workflows/installer.yml`: the Windows installer plus `AquaLite-Mac.zip`, with fixed-name copies
+(`AquaLite-Setup.exe`, `AquaLite-Mac.zip`) that the README buttons link to through `releases/latest/download/`.
+`mac-check.yml` runs the Mac installer and self-test on GitHub's macOS runner.
 
 Still to confirm: dictating with private mode on (the download works since the llama.cpp pre-release fix). Windows 11
 can't blur behind a rounded shape, so the Flow bar has no blur window there (`winapi.Frost.shapes_ok`).
